@@ -1,0 +1,529 @@
+---
+title: "Nsp3 fragment screen hit calling"
+output: html_notebook
+---
+
+This notebook is dedicatedd to the development of a easily-used, reproducible pipeline for Nsp3 macrodomain hit calling. 
+It is developed using data from fragment screens done with Stefan in the Shoichet lab.
+It is part of a larger effort to identify ligands against Nsp3 mac1 domain. 
+
+```{r}
+library(quantmod) # contains the findValleys function, which maybe we should just extract and put verbatim in a source file instead of loading this whole thing...?
+library(minpack.lm) # contains the nlsLM function, which we use for our fitting
+library(modelr) # used in both the data modeling and the analysis model fitting 
+library(SciViews) # contains the ln function used in the data modeling
+library(signal) # contains the savistky golay filter (savgolfilt), used to generate the first derivative data in both data modeling and analysis model fitting  
+library(ggrepel)
+library(tidyverse)
+source("support_scripts/analysis.R")
+source("support_scripts/plotting.R")
+filter <- dplyr::filter
+```
+
+Functions for handling qTower data which should be added to the support scripts
+```{r}
+make_channel_vec <- function( df ) { # make the vector which specifies channel for each reading
+  channels <- df %>% 
+            group_by(`0`) %>%
+            filter(n() == 1) %>%
+            select(`0`) %>%
+            as_vector()
+    
+  n_meas <- df %>%  # the number of wells measured per channel (always the same for all channels )
+            group_by(`0`) %>%
+            filter(n() > 1) %>%
+            tally() %>% 
+            nrow() 
+  
+  rep(channels , each = n_meas + 1) # add one, for the row which will still contain the channel itself
+}
+
+read_qTower <- function( file_path ) {
+  
+  df_raw <- read_csv(file_path, 
+               col_names = c(0:500) %>% as.character()) %>% # read in 500 columns; this should exceed any actual run, and fill in columsn to right as NAs
+               select_if(~sum(!is.na(.)) > 0) #%>% # remove all columns which are all NAs
+
+
+  df <- df_raw %>%
+          drop_na( tail(names(.), 1) %>% var() ) %>% # drop the header, which is empty in the tailing cols
+          mutate( channel = make_channel_vec(.)) %>% # add channel as a column
+          filter(!`0` %in% .$channel) %>%
+          rename(well = `0`) %>%
+          mutate_at(vars(-well, -channel), as.numeric) %>%
+          pivot_longer(-c("well", "channel"), names_to = "Temperature", values_to = "value") %>%
+          mutate_at(vars(well, channel), as.character) %>%
+          mutate_at(vars(Temperature, value), as.numeric) %>%
+          mutate(channel_f = factor(.$channel, levels = c("FAM", "JOE", "TAMRA", "ROX", "Cy5", "Cy5.5", "SyproOrange")))
+}
+
+facet_no_y_theme <- theme( # for the first hit-calling plot, the most austere
+  text = element_text(size = 4),
+  axis.title = element_blank(), # don't label the axes
+  axis.text.x = element_text(), # don't label the numbers on the axes
+  axis.ticks = element_blank(), # dont have ticks
+  legend.position = "right", # put a legent on the right of the plot
+  plot.title = element_text(lineheight=.8, face="bold", size = 12), # have a title
+  panel.grid.minor = element_blank(),
+  panel.grid.major = element_blank(),
+  strip.background = element_blank(),
+  panel.spacing.x = unit(0.1, "lines"),
+  panel.spacing.y = unit(0.1, "lines")
+)
+
+facet_wrap_linetyped2 <- function(df_melt, title, facets_wide) {
+  p <- ggplot(df_melt, aes(x = Temperature, # temperature on X
+                           y = value, # RFU on y
+                           color = channel_f, # colored by the state
+                           linetype = type,
+                           group = dye_conc_type_channel # group means series, as in, this defines the unique data sets
+  )) +
+    geom_line(size = 0.3, alpha = 0.8) + # change the line type depending on the dye concentration # linetype = df_melt$conc #
+    facet_wrap(~dye, scales = "free", ncol = facets_wide) +
+    labs(title = title, color = "Channel") +
+    theme_bw() +
+    scale_color_manual( values = c("Cy5.5" = "#67000d", "Cy5" = "#a50f15", "ROX" = "#ef3b2c", "TAMRA" = "#f16913", "JOE" = "#74c476", "FAM" = "#2171b5")) +
+    scale_linetype_manual(values = c("dashed", "solid")) +
+    facet_no_y_theme
+  
+  p # return the plot
+}
+
+# new daughter layout function
+df_to_layout <- function(df, layout_type) {
+  df_m <-   set_names( df ,  c("type","row",as.numeric( df [1,-c(1,2)]))) %>%
+    . [ -1 , -1] %>%
+    reshape2::melt( . ,id.vars = "row") %>%
+    mutate( . , well = as_vector(map2( . $row,  . $variable, paste0)) ) %>%
+    set_names( . , c("row", "column", layout_type, "well"))
+  df_m
+}
+
+make_layout <- function( filename ) { # from path to raw layout to a final fomatted layout file 
+  # read the layout file, and split each layout into an individual 
+  layout_list <- data.table::fread( filename, header = TRUE) %>%
+    as_tibble() %>%
+    split( . ,  . $Type)
+  
+  # put into a merge-able form
+  layout <- df_to_layout(layout_list[[1]], names(layout_list)[[1]])[c(1,2,4)] # initialize the list
+  for (i in c(1:length(layout_list))) {
+    layout <- layout %>%
+      mutate("var" =  as_vector(df_to_layout(layout_list[[i]], layout_type = names(layout_list)[[i]])[3] )) %>% # append the column of interest
+      set_names(c(names(layout), names(layout_list)[[i]])) # rename based on the column of interest
+  }
+  layout <- layout %>% 
+            unite("condition", c(4:ncol(.)), remove = FALSE) %>% # create a unique column, used to define groups after averaging
+            mutate_if(is.factor, as.character)
+            
+  layout
+}
+
+make_channel_vec <- function( df ) { # make the vector which specifies channel for each reading
+  channels <- df %>% 
+            group_by(`0`) %>%
+            filter(n() == 1) %>%
+            select(`0`) %>%
+            as_vector()
+    
+  n_meas <- df %>%  # the number of wells measured per channel (always the same for all channels )
+            group_by(`0`) %>%
+            filter(n() > 1) %>%
+            tally() %>% 
+            nrow() 
+  
+  rep(channels , each = n_meas + 1) # add one, for the row which will still contain the channel itself
+}
+
+read_qTower <- function( file_path ) {
+  
+  df_raw <- read_csv(file_path, 
+               col_names = c(0:500) %>% as.character()) %>% # read in 500 columns; this should exceed any actual run, and fill in columsn to right as NAs
+               select_if(~sum(!is.na(.)) > 0) #%>% # remove all columns which are all NAs
+
+
+  df <- df_raw %>%
+          drop_na( tail(names(.), 1) %>% var() ) %>% # drop the header, which is empty in the tailing cols
+          mutate( channel = make_channel_vec(.)) %>% # add channel as a column
+          filter(!`0` %in% .$channel) %>%
+          rename(well = `0`) %>%
+          mutate_at(vars(-well, -channel), as.numeric) %>%
+          pivot_longer(-c("well", "channel"), names_to = "Temperature", values_to = "value") %>%
+          mutate_at(vars(well, channel), as.character) %>%
+          mutate_at(vars(Temperature, value), as.numeric) %>%
+          mutate(channel_f = factor(.$channel, levels = c("FAM", "JOE", "TAMRA", "ROX", "Cy5", "Cy5.5", "SyproOrange")))
+}
+
+convert_numerics <- function( vec ) {
+  
+  if(all(varhandle::check.numeric(vec))){
+    # convert the vector to numeric
+    vec <- as.numeric(vec)
+  }
+  vec
+}
+```
+
+Read in and format the screening data.
+```{r}
+MAIN_PATH <- "data/Exp0858--20200729_Nsp3_fragment_test_batch_2_with_SYPRO_and_T004/"
+LAYOUT_PATH <- MAIN_PATH %>% paste0("Exp0858--20200729_Nsp3_fragment_test_batch_2_with_SYPRO_and_T004_layout.csv" )
+DATA_PATH <- MAIN_PATH %>% paste0("Exp0858--20200729_Nsp3_fragments_batch2_screen_SYPRO_and_T004.csv" )
+SAVE_PATH <- MAIN_PATH %>% paste0("out/" )
+
+
+layout <- make_layout(LAYOUT_PATH)
+
+df_raw <- read_qTower(DATA_PATH) %>%
+                                    mutate(Temperature = .$Temperature + (25-1))%>%
+                                      full_join(layout)   %>%
+                                    unite(variable, c(well, channel), remove = FALSE) %>%
+                  group_by(variable)  %>%
+                  mutate(Temperature_norm = BBmisc::normalize(Temperature, method = "range", range = c(0,1)),
+                         value_norm = BBmisc::normalize(value, method = "range", range = c(0,1))
+                         ) %>%
+                ungroup() %>%
+                group_by(compound, channel) %>%
+                mutate(value_norm_by_comp = BBmisc::normalize(value, method = "range", range = c(0,1))) %>%
+                ungroup()
+  
+
+ by_variable <- df_raw %>%
+                nest(data = c(Temperature, value, channel, Temperature_norm, value_norm, value_norm_by_comp))
+ 
+ make_string_list <-  function(...) {
+  args <- ensyms(...)
+  purrr::map(args, rlang::as_string) %>% as_vector()
+}
+```
+Quick data exploration
+```{r}
+quick_look <- function(df, .filter_vars, color_var, plot_title = "", linetype_values,
+                       xvar = Temperature, yvar = value) {
+
+  ### from advanced R, and probably a reason to think about the way we do flexible filtering right now
+  # If you find yourself working with strings containing code very frequently, you should reconsider your process. Read Chapter 19 and consider whether you can generate expressions using quasiquotation more safely.
+  
+  df %>%
+    filter( !!rlang::parse_expr(.filter_vars) ) %>%
+    
+    ggplot(aes(x = {{xvar}}, y = {{yvar}}, group = variable, color = {{color_var}}, linetype = protein)) +
+        scale_linetype_manual(values = linetype_values) +
+        geom_line(alpha = 0.5) +
+        labs(x = "Temperature", y = "RFU", title = plot_title)
+  
+}
+
+quick_look(df_raw, 
+           .filter_vars = "channel == 'FAM' & dye == 'T004' & compound_group != 'test'", 
+           color_var = compound_group, 
+           plot_title = "Exp0858 Control Conditions, qTower FAM errored, unusable data \ndye = T004, channel =  FAM",
+           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
+
+quick_look(df_raw, 
+           .filter_vars = "channel == 'FAM' & dye == 'T004' ", 
+           color_var = compound_group, 
+           plot_title = "Exp0858 All Conditions, qTower FAM errored, unusable data \ndye = SYPRO, channel =  TAMRA",
+           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
+
+
+quick_look(df_raw, 
+           .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test'", 
+           color_var = compound_group, 
+           plot_title = "Exp0858 Control Conditions \ndye = SYPRO, channel =  TAMRA",
+           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
+
+quick_look(df_raw, 
+           .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' ", 
+           color_var = compound_group, 
+           plot_title = "Exp0858 All Conditions \ndye = SYPRO, channel =  TAMRA",
+           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
+
+quick_look(df_raw, 
+           .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' ", #& protein == 'Nsp3'
+           color_var = compound_group,
+           plot_title = "Exp0858 All Conditions \ndye = SYPRO, channel =  TAMRA",
+           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"),
+           xvar = Temperature_norm,
+           yvar = value_norm_by_comp)# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
+```
+Plot all of the raw screening data, overlaying controls and test compounds. 
+Arrange the plots by their position in the plate. 
+```{r}
+full_plate_view <- function(df, 
+                            .filter_vars, 
+                            .color_var = compound_group, 
+                            linetype_values,
+                            
+                            #optional inputs
+                            plot_title = "", 
+                            .xvar = Temperature, 
+                            .yvar = value_norm_by_comp,
+                            filter_control_vars = "compound_group != 'test' & compound != 'Empty'",
+                            .drop_control_cols = c(protein_row, protein_column) #c(row, columns)
+                       ) {
+  
+  df_control <- df %>%
+                filter(!!rlang::parse_expr(filter_control_vars)) %>%
+                select(-{{.drop_control_cols}}) %>%
+    filter( !!rlang::parse_expr(.filter_vars) ) %>%
+    mutate_all(convert_numerics)
+  
+  df_control
+
+  df %>%
+    filter( !!rlang::parse_expr(.filter_vars) ) %>%
+    filter(is.na(protein_well) == FALSE,
+           is.na(protein_column) == FALSE) %>%
+    
+    mutate_all(convert_numerics) %>%
+
+    ggplot(aes(x = {{.xvar}}, y = {{.yvar}}, group = variable, color = {{.color_var}}, linetype = protein)) +
+
+        geom_line(data = df_control, aes(x = {{.xvar}}, y = {{.yvar}}, group = variable, color = {{.color_var}}, linetype = protein), size = 0.1, alpha = 0.3) +
+    scale_color_manual(values = c("DMSO" = "blue", "ADP_ribose" = "black", "test" = "red")) +
+        
+    geom_line(alpha = 1) +
+        scale_linetype_manual(values = linetype_values) +
+        facet_grid(protein_row~protein_column) +
+        labs(x = "Temperature", y = "RFU", title = plot_title) -> p
+}
+
+
+protein_wells <- df_raw %>%
+  filter(dye == 'SYPRO',
+  compound != 'Empty' ) %>%
+  group_by(dye, channel, compound, well, compound_group, protein) %>%
+  nest() %>%
+  select(-data) %>%
+  arrange(dye, channel, compound,  compound_group, protein) %>%
+
+  filter(compound_group == "test") %>% # this is something we'll need to fix later... 
+  pivot_wider(  names_from = protein, values_from = well) %>%
+  mutate(protein_well = Nsp3) %>%
+  pivot_longer(protein_well, values_to = "protein_well") %>%
+  extract(Nsp3, into = c("protein_row", "protein_column"), "^([A-Z]+)(\\d+)$")
+  
+df_protein_wells_merge <- df_raw %>%
+    filter(dye == 'SYPRO',
+  compound != 'Empty' ) %>%
+  left_join( . , protein_wells, by = make_string_list(dye, channel, compound,  compound_group))
+
+
+
+p <- full_plate_view(df = df_protein_wells_merge, 
+                .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound != 'Empty' ", 
+
+                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_TAMRA", 
+                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
+                # .xvar = Temperature, 
+                # .yvar = value_norm_by_comp,
+                # filter_control_vars,
+                # .drop_control_cols
+                )
+
+ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_TAMRA.pdf", p, width = 15, height = 3 )
+
+p2 <- full_plate_view(df = df_protein_wells_merge, 
+                .filter_vars = "channel == 'JOE' & dye == 'SYPRO' & compound != 'Empty' ", 
+
+                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_JOE", 
+                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
+                # .xvar = Temperature, 
+                # .yvar = value_norm_by_comp,
+                # filter_control_vars,
+                # .drop_control_cols
+                )
+
+ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_JOE.pdf", p2, width = 15, height = 3 )
+
+p3 <- full_plate_view(df = df_protein_wells_merge, 
+                .filter_vars = "channel == 'ROX' & dye == 'SYPRO' & compound != 'Empty' ", 
+
+                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_ROX", 
+                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
+                # .xvar = Temperature, 
+                # .yvar = value_norm_by_comp,
+                # filter_control_vars,
+                # .drop_control_cols
+                )
+
+ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_ROX.pdf", p3, width = 15, height = 3 )
+
+p4 <- full_plate_view(df = df_protein_wells_merge, 
+                .filter_vars = "channel == 'Cy5' & dye == 'SYPRO' & compound != 'Empty' ", 
+
+                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy5", 
+                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
+                # .xvar = Temperature, 
+                # .yvar = value_norm_by_comp,
+                # filter_control_vars,
+                # .drop_control_cols
+                )
+
+ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy5.pdf", p4, width = 15, height = 3 )
+
+p5 <- full_plate_view(df = df_protein_wells_merge, 
+                .filter_vars = "channel == 'Cy5.5' & dye == 'SYPRO' & compound != 'Empty' ", 
+
+                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy5.5", 
+                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
+                # .xvar = Temperature, 
+                # .yvar = value_norm_by_comp,
+                # filter_control_vars,
+                # .drop_control_cols
+                )
+
+ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy55.pdf", p5, width = 15, height = 3 )
+```
+
+
+
+Determine Tma using both dRFU and all four fitting models.
+```{r}
+low_T <-  25
+high_T <- 94
+n_meas <- 69
+            
+n2r <- make_temp_n2r(range(low_T:high_T)) 
+win3d <- floor(3/((n2r(1) - n2r(0))/n_meas))
+if ( win3d < 5 ) { win3d <<- 5 }
+peak_finder_nest <- make_peak_finder_nest( win3d )
+sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width( win3d ))
+
+#sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width(df)) # this will ultimately be set by the uploaded data
+sgfilt_nest <- sgfilt_set_n(n_ = 13)
+
+# fit only the channels which have signal
+by_variable <- by_variable %>%
+  filter(channel_f == "TAMRA")
+                #filter(channel_f %in% c("JOE", "TAMRA", "ROX"))
+
+df_tms <- by_variable %>% #df_int %>% # add the first derivative Tms
+    plyr::mutate(sgd1 = purrr::map(data, sgfilt_nest, m_ = 1)) %>% # add the first derivative data
+    plyr::mutate(dRFU_tma = as_vector(purrr::map2(data, sgd1, Tm_by_dRFU)))
+
+df_tms 
+        
+start_pars <- get_start_pars(by_variable)
+s1_list <- model_all(s1_model, "s1_pred", start_pars, win3d) # requires "well" and "condition" columns
+s1_d_list <- model_all(s1_d_model, "s1_d_pred", start_pars, win3d)
+s2_list <- model_all(s2_model, "s2_pred", start_pars, win3d)
+s2_d_list <- model_all(s2_d_model, "s2_d_pred", start_pars, win3d)
+
+save_list <- list(by_variable = by_variable,
+                  df_tms = df_tms,
+                  start_pars = start_pars,
+                  s1_list = s1_d_list,
+                  s1_d_list = s1_d_list,
+                  s2_list = s2_list,
+                  s2_d_list = s2_d_list)
+
+write_rds("Exp0858--20200810_Nsp3_dRFU_and_model_fit_TAMRA.rds", x = save_list)
+
+
+```
+
+Make the BIC plots for all of the fitted models
+```{r}
+df_models <- bind_rows(s1_list$df_models, 
+                               s1_d_list$df_models, 
+                               s2_list$df_models, 
+                               s2_d_list$df_models) %>%
+                select(well, Temperature, Temperature_norm, pred, value_norm, condition, which_model, component) %>%
+                left_join(layout, by =  c("condition", "well")) %>%
+                filter(protein == "Nsp3",
+                     dye == "SYPRO",
+                     compound != "Empty")
+
+df_BIC_models <-bind_rows(s1_list$df_BIC, 
+                               s1_d_list$df_BIC, 
+                               s2_list$df_BIC, 
+                               s2_d_list$df_BIC) %>%
+                  left_join(layout, by = c("condition", "well")) %>%
+                  filter(protein == "Nsp3",
+                         dye == "SYPRO",
+                         compound != "Empty")
+
+df_BIC_models_p <- df_BIC_models %>% cond_df_BIC_for_plot (  ) 
+
+df_tm_models <- bind_rows(s1_list$tm_table_models, 
+                               s1_d_list$tm_table_models, 
+                               s2_list$tm_table_models, 
+                               s2_d_list$tm_table_models) %>%
+                left_join(layout, by = "condition") %>%
+                filter(protein == "Nsp3",
+                       dye == "SYPRO",
+                       compound != "Empty")
+
+        df_BIC_models_p <- df_BIC_models %>%
+                                        cond_df_BIC_for_plot (  ) 
+
+  
+df_models_p <- cond_df_model_for_plot( df_models, df_BIC_models) %>%
+                          left_join(layout, by = c("condition", "well"))
+  
+
+p_BIC_out <- plot_all_fits_shiny( df_models_p, df_BIC_models_p )
+      ggsave("test_p_bic.pdf", p_BIC_out, height = 100, width = 15, limitsize = FALSE)
+
+p_BIC_out_controls <- plot_all_fits_shiny( df_models_p %>% filter(compound_group != "test"), df_BIC_models_p %>% filter(compound_group != "test"))
+ ggsave("test_p_bic_controls.pdf", p_BIC_out_controls , height = 20, width = 15, limitsize = FALSE)
+
+p_BIC_out <- plot_all_fits_shiny( df_models_p, df_BIC_models_p )
+
+df_BIC_models_p  %>% head()
+df_models_p %>% head()
+
+```
+
+Make a scatter plot of Tma versus compound (standard HTS plot)
+```{r}
+
+df_raw %>%
+  filter(channel == 'TAMRA',
+         dye == 'SYPRO',
+         Temperature == 25) %>%
+  ggplot(aes(x = condition, y = value, color = compound_group, shape = protein)) +
+  geom_point(alpha = 0.25) +
+  scale_shape_manual(values = c("Nsp3" = 16, "Buffer" = 1))+
+  theme(axis.text.x = element_blank())
+
+
+df_raw %>%
+  filter(channel == 'TAMRA',
+         dye == 'SYPRO',
+         Temperature == 25) %>%
+  ggplot(aes(x = condition, y = value_norm, color = compound_group, shape = protein)) +
+  geom_point(alpha = 0.25) +
+  scale_shape_manual(values = c("Nsp3" = 16, "Buffer" = 1))+
+  theme(axis.text.x = element_blank())
+
+
+df_raw %>%
+  filter(channel == 'TAMRA',
+         dye == 'SYPRO',
+         Temperature == 25,
+         compound_group == "test") %>%
+  select(compound, protein, value) %>%
+  pivot_wider(values_from = value, names_from = protein) %>%
+  mutate(delta_25 = Nsp3 - Buffer) %>%
+  ggplot(aes(x = compound, y = delta_25)) +
+  geom_point(alpha = 0.25) +
+  scale_shape_manual(values = c("Nsp3" = 16, "Buffer" = 1))+
+  theme(axis.text.x = element_blank())
+ 
+```
+
+Make a more informed scatter plot incorporating parameters from the models (shape calling?)
+```{r}
+
+```
+
+
+
+
+
+
+
+
