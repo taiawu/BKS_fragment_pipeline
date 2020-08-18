@@ -6,6 +6,15 @@ output: html_notebook
 This notebook is dedicatedd to the development of a easily-used, reproducible pipeline for Nsp3 macrodomain hit calling. 
 It is developed using data from fragment screens done with Stefan in the Shoichet lab.
 It is part of a larger effort to identify ligands against Nsp3 mac1 domain. 
+```{r}
+# Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_SYPRO.csv
+# Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_T004.csv
+# Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_SYPRO.csv
+# Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_T004.csv
+# 
+# layouts/Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv
+# layouts/Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv
+```
 
 ```{r}
 library(quantmod) # contains the findValleys function, which maybe we should just extract and put verbatim in a source file instead of loading this whole thing...?
@@ -13,11 +22,14 @@ library(minpack.lm) # contains the nlsLM function, which we use for our fitting
 library(modelr) # used in both the data modeling and the analysis model fitting 
 library(SciViews) # contains the ln function used in the data modeling
 library(signal) # contains the savistky golay filter (savgolfilt), used to generate the first derivative data in both data modeling and analysis model fitting  
-library(ggrepel)
+library(ggrepel) # for plot labeling
+library(dplyr)
+library(purrr)
 library(tidyverse)
-source("support_scripts/analysis.R")
-source("support_scripts/plotting.R")
-filter <- dplyr::filter
+source("scripts/analysis.R")
+source("scripts/plotting.R")
+filter <- dplyr::filter # filter is masked from dplyr by signal
+as_vector <- purrr::as_vector
 ```
 
 Functions for handling qTower data which should be added to the support scripts
@@ -142,16 +154,18 @@ read_qTower <- function( file_path ) {
                select_if(~sum(!is.na(.)) > 0) #%>% # remove all columns which are all NAs
 
 
-  df <- df_raw %>%
-          drop_na( tail(names(.), 1) %>% var() ) %>% # drop the header, which is empty in the tailing cols
-          mutate( channel = make_channel_vec(.)) %>% # add channel as a column
-          filter(!`0` %in% .$channel) %>%
-          rename(well = `0`) %>%
-          mutate_at(vars(-well, -channel), as.numeric) %>%
-          pivot_longer(-c("well", "channel"), names_to = "Temperature", values_to = "value") %>%
-          mutate_at(vars(well, channel), as.character) %>%
-          mutate_at(vars(Temperature, value), as.numeric) %>%
-          mutate(channel_f = factor(.$channel, levels = c("FAM", "JOE", "TAMRA", "ROX", "Cy5", "Cy5.5", "SyproOrange")))
+df <- df_raw %>%
+        drop_na(ncol(.)) %>% # drop the header, which is NA in the tailing columns
+            mutate( channel = make_channel_vec(.)) %>% # add channel as a column
+                   rename(well = "0") %>%
+        
+                 filter(!well %in% .$channel) %>%
+         
+                  mutate_at(vars(-well, -channel), as.numeric) %>%
+                  pivot_longer(-c("well", "channel"), names_to = "Temperature", values_to = "value") %>%
+                  mutate_at(vars(well, channel), as.character) %>%
+                  mutate_at(vars(Temperature, value), as.numeric) %>%
+                  mutate(channel_f = factor(.$channel, levels = c("FAM", "JOE", "TAMRA", "ROX", "Cy5", "Cy5.5", "SyproOrange")))
 }
 
 convert_numerics <- function( vec ) {
@@ -162,40 +176,181 @@ convert_numerics <- function( vec ) {
   }
   vec
 }
-```
 
-Read in and format the screening data.
-```{r}
-MAIN_PATH <- "data/Exp0858--20200729_Nsp3_fragment_test_batch_2_with_SYPRO_and_T004/"
-LAYOUT_PATH <- MAIN_PATH %>% paste0("Exp0858--20200729_Nsp3_fragment_test_batch_2_with_SYPRO_and_T004_layout.csv" )
-DATA_PATH <- MAIN_PATH %>% paste0("Exp0858--20200729_Nsp3_fragments_batch2_screen_SYPRO_and_T004.csv" )
-SAVE_PATH <- MAIN_PATH %>% paste0("out/" )
-
-
-layout <- make_layout(LAYOUT_PATH)
-
-df_raw <- read_qTower(DATA_PATH) %>%
-                                    mutate(Temperature = .$Temperature + (25-1))%>%
-                                      full_join(layout)   %>%
-                                    unite(variable, c(well, channel), remove = FALSE) %>%
-                  group_by(variable)  %>%
-                  mutate(Temperature_norm = BBmisc::normalize(Temperature, method = "range", range = c(0,1)),
-                         value_norm = BBmisc::normalize(value, method = "range", range = c(0,1))
-                         ) %>%
-                ungroup() %>%
-                group_by(compound, channel) %>%
-                mutate(value_norm_by_comp = BBmisc::normalize(value, method = "range", range = c(0,1))) %>%
-                ungroup()
-  
-
- by_variable <- df_raw %>%
-                nest(data = c(Temperature, value, channel, Temperature_norm, value_norm, value_norm_by_comp))
- 
  make_string_list <-  function(...) {
   args <- ensyms(...)
   purrr::map(args, rlang::as_string) %>% as_vector()
 }
 ```
+
+Read in and format the screening data.
+```{r}
+find_tmas <- function(by_variable_raw, 
+                      low_T = 25,
+                      high_T = 94,
+                      n_meas = 69,
+                      filter_criteria) {
+                          # get the filtering and smoothing parameters
+                                n2r <- make_temp_n2r(range(low_T:high_T)) 
+                                win3d <- floor(3/((n2r(1) - n2r(0))/n_meas))
+                                if ( win3d < 5 ) { win3d <<- 5 }
+                                
+                                peak_finder_nest <<- make_peak_finder_nest( win3d )
+                                sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width( win3d ))
+                                
+                               
+                              sgfilt_nest <- sgfilt_set_n(n_ = 13)
+                        
+                          # fit only the channels which have signal
+                          by_variable <- by_variable_raw %>%
+                                        filter(!!rlang::parse_expr( filter_criteria))
+                          
+                          
+                          df_tms <- by_variable %>% #df_int %>% # add the first derivative Tms
+                                    plyr::mutate(sgd1 = purrr::map(data, sgfilt_nest, m_ = 1)) %>% # add the first derivative data
+                                    plyr::mutate(dRFU_tma = as_vector(purrr::map2(data, sgd1, Tm_by_dRFU))) # find the dRFU tmas
+                        
+                          # fit to all models        
+                          start_pars <- get_start_pars(by_variable)
+                          s1_list <- model_all(s1_model, "s1_pred", start_pars, win3d) # requires "well" and "condition" columns
+                          s1_d_list <- model_all(s1_d_model, "s1_d_pred", start_pars, win3d)
+                          s2_list <- model_all(s2_model, "s2_pred", start_pars, win3d)
+                          s2_d_list <- model_all(s2_d_model, "s2_d_pred", start_pars, win3d)
+                          
+                          save_list <- list(by_variable = by_variable,
+                                            df_tms = df_tms,
+                                            start_pars = start_pars,
+                                            s1_list = s1_d_list,
+                                            s1_d_list = s1_d_list,
+                                            s2_list = s2_list,
+                                            s2_d_list = s2_d_list)
+}
+
+condition_qTower_raw <- function(DATA_PATH, LAYOUT_PATH, screen_name, low_T) {
+                             df_raw <- read_qTower(DATA_PATH)  %>%
+                                          mutate(Temperature = .$Temperature + (low_T-1))%>% # convert cycles to temperature
+                                          left_join(make_layout(LAYOUT_PATH))%>% # add the layout
+                                          unite(variable, c(well, channel), remove = FALSE) %>% # add a unique column
+
+                                          group_by(variable)  %>%
+                                          mutate(Temperature_norm = BBmisc::normalize(Temperature, method = "range", range = c(0,1)), # normalize each trace 0 to 1
+                                                 value_norm = BBmisc::normalize(value, method = "range", range = c(0,1))) %>%
+                                          ungroup() %>%
+
+                                        group_by(compound, channel) %>%
+                                        mutate(value_norm_by_comp = BBmisc::normalize(value, method = "range", range = c(0,1))) %>% # normalize each compound, to include EBPs in range
+                                        ungroup()
+}
+ 
+ process_screen <- function(DATA_PATH, 
+                            LAYOUT_PATH, 
+                            screen_name,
+                            low_T = 25,
+                            high_T = 94,
+                            n_meas = 69,
+                            ignore_vars = "",
+                            fit_if = c("TAMRA", "FAM", "SyproOrange"),
+                            save_fits = TRUE,
+                            save_path = "",
+                            save_name = "fits.rds"
+                            ) {
+   
+                        df_raw <- condition_qTower_raw(DATA_PATH, LAYOUT_PATH, screen_name, low_T) 
+
+                        by_variable <- df_raw %>%
+                                        nest(data = c(Temperature, value, channel, Temperature_norm, value_norm, value_norm_by_comp))
+
+                        fits <- find_tmas(by_variable_raw = by_variable,
+                                                low_T = low_T,
+                                                high_T = high_T,
+                                                n_meas = n_meas,
+                                                filter_criteria = fit_if)
+
+                        outlist <- list(df_raw = df_raw,
+                                        by_variable = by_variable,
+                                        fits = fits)
+                        
+
+                         if (save_fits == TRUE) { paste0(SAVE_PATH, save_name)  %>% write_rds( . , x = outlist) }
+
+                       outlist # always return this
+
+ }
+ 
+ 
+ ### a closure to create specific screening functions, where many plates are run and processed in the same way
+ make_screen_process <- function(low_T = 25,
+                            high_T = 94,
+                            n_meas = 69,
+                            ignore_vars = "protein == Empty",
+                            fit_if = "channel_f %in% c('TAMRA', 'FAM', 'SyproOrange') & protein == 'SP0150_Nsp3'",
+                            save_path = SAVE_PATH) {
+  
+   # the defined function contains all argument which you want the output function to have    
+   function(DATA_PATH, 
+               LAYOUT_PATH,
+                screen_name,
+                save_fits = TRUE,
+                save_name
+                ) {
+     # this function includes assignments for all of teh arguments passed to the closure, which will be set in the resulting function
+                   process_screen(DATA_PATH, 
+                          LAYOUT_PATH,
+                          screen_name,
+                          save_fits = TRUE,
+                          save_name,
+                          low_T = low_T,
+                          high_T = high_T,
+                          n_meas = n_meas,
+                          ignore_vars = ignore_vars,
+                          fit_if = fit_if,
+                          save_path = save_path)
+         
+       } 
+ }
+ 
+```
+
+```{r}
+MAIN_PATH <- "data/Exp0866--20200811_Nsp3_T004_SYPRO_fragment_all_batch_retest/"
+LAYOUT_PATH <- MAIN_PATH %>% paste0("layouts/")
+SAVE_PATH <- MAIN_PATH %>% paste0("out/")
+
+
+process_866_screen <- make_screen_process(low_T = 25,
+                                          high_T = 94,
+                                          n_meas = 69,
+                                          ignore_vars = "protein == Empty",
+                                          fit_if = "channel_f %in% c('TAMRA', 'FAM', 'SyproOrange') & protein == 'SP0150_Nsp3'",
+                                          save_path = SAVE_PATH) 
+
+SYPRO_b2 <- process_866_screen(DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_SYPRO.csv"), 
+                               LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"),
+                               screen_name = "Exp866_batch2_SYPRO",
+                               save_fits = TRUE,
+                               save_name = "Exp866_batch2_SYPRO_fits.rds")
+
+test <-  process_screen(DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_SYPRO.csv"), 
+                            LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"), 
+                            screen_name = "Exp866_batch1_SYPRO",
+                            low_T = 25,
+                            high_T = 94,
+                            n_meas = 69,
+                            ignore_vars = "protein == Empty",
+                            fit_if = "channel_f %in% c('TAMRA', 'FAM', 'SyproOrange') & protein == 'SP0150_Nsp3'",
+                            save_fits = TRUE,
+                            save_path = SAVE_PATH,
+                            save_name = "Exp866_batch1_SYPRO_fits.rds"
+                            )
+test$df_raw
+# This message is displayed once per session. # but actually it gets displayed a lot?
+# Note: Using an external vector in selections is ambiguous.
+# ℹ Use `all_of(sub_info)` instead of `sub_info` to silence this message.
+# ℹ See <https://tidyselect.r-lib.org/reference/faq-external-vector.html>.
+
+```
+
+
 Quick data exploration
 ```{r}
 quick_look <- function(df, .filter_vars, color_var, plot_title = "", linetype_values,
@@ -420,8 +575,6 @@ save_list <- list(by_variable = by_variable,
                   s2_d_list = s2_d_list)
 
 write_rds("Exp0858--20200810_Nsp3_dRFU_and_model_fit_TAMRA.rds", x = save_list)
-
-
 ```
 
 Make the BIC plots for all of the fitted models
