@@ -7,16 +7,6 @@ This notebook is dedicatedd to the development of a easily-used, reproducible pi
 It is developed using data from fragment screens done with Stefan in the Shoichet lab.
 It is part of a larger effort to identify ligands against Nsp3 mac1 domain. 
 ```{r}
-# Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_SYPRO.csv
-# Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_T004.csv
-# Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_SYPRO.csv
-# Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_T004.csv
-# 
-# layouts/Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv
-# layouts/Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv
-```
-
-```{r}
 library(quantmod) # contains the findValleys function, which maybe we should just extract and put verbatim in a source file instead of loading this whole thing...?
 library(minpack.lm) # contains the nlsLM function, which we use for our fitting
 library(modelr) # used in both the data modeling and the analysis model fitting 
@@ -28,334 +18,145 @@ library(purrr)
 library(tidyverse)
 source("scripts/analysis.R")
 source("scripts/plotting.R")
+source("scripts/screen_analysis.R")
 filter <- dplyr::filter # filter is masked from dplyr by signal
 as_vector <- purrr::as_vector
 ```
 
-Functions for handling qTower data which should be added to the support scripts
+
 ```{r}
-make_channel_vec <- function( df ) { # make the vector which specifies channel for each reading
-  channels <- df %>% 
-            group_by(`0`) %>%
-            filter(n() == 1) %>%
-            select(`0`) %>%
-            as_vector()
+process_screen <- function(DATA_PATH, 
+                           LAYOUT_PATH, 
+                           screen_name,
+                           low_T = 25,
+                           high_T = 94,
+                           n_meas = 69,
+                           ignore_vars = "",
+                           fit_if = c("TAMRA", "FAM", "SyproOrange"),
+                           save_fits = TRUE,
+                           save_path = "",
+                           save_name = "fits.rds",
+                           temp_range = c(25, 85),
+                           quick_look = TRUE
+) {
+  
+  df_raw <- condition_qTower_raw(DATA_PATH, LAYOUT_PATH, screen_name, low_T) %>%
+              filter(between(Temperature, temp_range[[1]], temp_range[[2]])) %>%
+              mutate_all(convert_numerics)
+  
+  # if (quick_look = TRUE) {
+  #   
+  #   quick_look(df_raw, 
+  #          .filter_vars = "channel == 'FAM' & dye == 'T004' & compound_group != 'test'", 
+  #          color_var = compound_group, 
+  #          plot_title = "Exp0858 Control Conditions, qTower FAM errored, unusable data \ndye = T004, channel =  FAM",
+  #          linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))
+  #   
+  # } else if (quick_look = FALSE) {
     
-  n_meas <- df %>%  # the number of wells measured per channel (always the same for all channels )
-            group_by(`0`) %>%
-            filter(n() > 1) %>%
-            tally() %>% 
-            nrow() 
+     by_variable <- df_raw %>%
+    nest(data = c(Temperature, value, channel, Temperature_norm, value_norm, value_norm_by_comp))
   
-  rep(channels , each = n_meas + 1) # add one, for the row which will still contain the channel itself
-}
-
-read_qTower <- function( file_path ) {
+  fits <- find_tmas(by_variable_raw = by_variable,
+                    low_T = low_T,
+                    high_T = high_T,
+                    n_meas = 69, #### THIS NEEDS TO BE FIXED! Sometimes throws an error in sgolayfilt odd requirement if set dynamically #df_raw$Temperature %>% unique() %>% length(),
+                    filter_criteria = fit_if)
   
-  df_raw <- read_csv(file_path, 
-               col_names = c(0:500) %>% as.character()) %>% # read in 500 columns; this should exceed any actual run, and fill in columsn to right as NAs
-               select_if(~sum(!is.na(.)) > 0) #%>% # remove all columns which are all NAs
-
-
-  df <- df_raw %>%
-          drop_na( tail(names(.), 1) %>% var() ) %>% # drop the header, which is empty in the tailing cols
-          mutate( channel = make_channel_vec(.)) %>% # add channel as a column
-          filter(!`0` %in% .$channel) %>%
-          rename(well = `0`) %>%
-          mutate_at(vars(-well, -channel), as.numeric) %>%
-          pivot_longer(-c("well", "channel"), names_to = "Temperature", values_to = "value") %>%
-          mutate_at(vars(well, channel), as.character) %>%
-          mutate_at(vars(Temperature, value), as.numeric) %>%
-          mutate(channel_f = factor(.$channel, levels = c("FAM", "JOE", "TAMRA", "ROX", "Cy5", "Cy5.5", "SyproOrange")))
-}
-
-facet_no_y_theme <- theme( # for the first hit-calling plot, the most austere
-  text = element_text(size = 4),
-  axis.title = element_blank(), # don't label the axes
-  axis.text.x = element_text(), # don't label the numbers on the axes
-  axis.ticks = element_blank(), # dont have ticks
-  legend.position = "right", # put a legent on the right of the plot
-  plot.title = element_text(lineheight=.8, face="bold", size = 12), # have a title
-  panel.grid.minor = element_blank(),
-  panel.grid.major = element_blank(),
-  strip.background = element_blank(),
-  panel.spacing.x = unit(0.1, "lines"),
-  panel.spacing.y = unit(0.1, "lines")
-)
-
-facet_wrap_linetyped2 <- function(df_melt, title, facets_wide) {
-  p <- ggplot(df_melt, aes(x = Temperature, # temperature on X
-                           y = value, # RFU on y
-                           color = channel_f, # colored by the state
-                           linetype = type,
-                           group = dye_conc_type_channel # group means series, as in, this defines the unique data sets
-  )) +
-    geom_line(size = 0.3, alpha = 0.8) + # change the line type depending on the dye concentration # linetype = df_melt$conc #
-    facet_wrap(~dye, scales = "free", ncol = facets_wide) +
-    labs(title = title, color = "Channel") +
-    theme_bw() +
-    scale_color_manual( values = c("Cy5.5" = "#67000d", "Cy5" = "#a50f15", "ROX" = "#ef3b2c", "TAMRA" = "#f16913", "JOE" = "#74c476", "FAM" = "#2171b5")) +
-    scale_linetype_manual(values = c("dashed", "solid")) +
-    facet_no_y_theme
+  outlist <- list(df_raw = df_raw,
+                  by_variable = by_variable,
+                  fits = fits)
   
-  p # return the plot
-}
-
-# new daughter layout function
-df_to_layout <- function(df, layout_type) {
-  df_m <-   set_names( df ,  c("type","row",as.numeric( df [1,-c(1,2)]))) %>%
-    . [ -1 , -1] %>%
-    reshape2::melt( . ,id.vars = "row") %>%
-    mutate( . , well = as_vector(map2( . $row,  . $variable, paste0)) ) %>%
-    set_names( . , c("row", "column", layout_type, "well"))
-  df_m
-}
-
-make_layout <- function( filename ) { # from path to raw layout to a final fomatted layout file 
-  # read the layout file, and split each layout into an individual 
-  layout_list <- data.table::fread( filename, header = TRUE) %>%
-    as_tibble() %>%
-    split( . ,  . $Type)
   
-  # put into a merge-able form
-  layout <- df_to_layout(layout_list[[1]], names(layout_list)[[1]])[c(1,2,4)] # initialize the list
-  for (i in c(1:length(layout_list))) {
-    layout <- layout %>%
-      mutate("var" =  as_vector(df_to_layout(layout_list[[i]], layout_type = names(layout_list)[[i]])[3] )) %>% # append the column of interest
-      set_names(c(names(layout), names(layout_list)[[i]])) # rename based on the column of interest
+  if (save_fits != FALSE) { paste0(SAVE_PATH, save_name)  %>% write_rds( . , x = outlist) }
+  
+  outlist 
+  
   }
-  layout <- layout %>% 
-            unite("condition", c(4:ncol(.)), remove = FALSE) %>% # create a unique column, used to define groups after averaging
-            mutate_if(is.factor, as.character)
-            
-  layout
-}
+  
 
-make_channel_vec <- function( df ) { # make the vector which specifies channel for each reading
-  channels <- df %>% 
-            group_by(`0`) %>%
-            filter(n() == 1) %>%
-            select(`0`) %>%
-            as_vector()
+
+make_screen_process <- function(low_T = 25,
+                                high_T = 94,
+                                n_meas = 69,
+                                ignore_vars = "protein == Empty",
+                                fit_if = "channel_f %in% c('TAMRA', 'FAM', 'SyproOrange') & protein == 'SP0150_Nsp3'",
+                                save_path = SAVE_PATH,
+                                temp_range) {
+  
+  # the defined function contains all argument which you want the output function to have    
+  function(DATA_PATH, 
+           LAYOUT_PATH,
+           screen_name,
+           save_fits = TRUE,
+           save_name
+  ) {
+    # this function includes assignments for all of the arguments passed to the closure, which will be set in the resulting function
+    process_screen(DATA_PATH, 
+                   LAYOUT_PATH,
+                   screen_name,
+                   save_fits = TRUE,
+                   save_name,
+                   low_T = low_T,
+                   high_T = high_T,
+                   n_meas = n_meas,
+                   ignore_vars = ignore_vars,
+                   fit_if = fit_if,
+                   save_path = save_path,
+                   temp_range = temp_range)
     
-  n_meas <- df %>%  # the number of wells measured per channel (always the same for all channels )
-            group_by(`0`) %>%
-            filter(n() > 1) %>%
-            tally() %>% 
-            nrow() 
-  
-  rep(channels , each = n_meas + 1) # add one, for the row which will still contain the channel itself
+  } 
 }
 
-read_qTower <- function( file_path ) {
-  
-  df_raw <- read_csv(file_path, 
-               col_names = c(0:500) %>% as.character()) %>% # read in 500 columns; this should exceed any actual run, and fill in columsn to right as NAs
-               select_if(~sum(!is.na(.)) > 0) #%>% # remove all columns which are all NAs
-
-
-df <- df_raw %>%
-        drop_na(ncol(.)) %>% # drop the header, which is NA in the tailing columns
-            mutate( channel = make_channel_vec(.)) %>% # add channel as a column
-                   rename(well = "0") %>%
-        
-                 filter(!well %in% .$channel) %>%
-         
-                  mutate_at(vars(-well, -channel), as.numeric) %>%
-                  pivot_longer(-c("well", "channel"), names_to = "Temperature", values_to = "value") %>%
-                  mutate_at(vars(well, channel), as.character) %>%
-                  mutate_at(vars(Temperature, value), as.numeric) %>%
-                  mutate(channel_f = factor(.$channel, levels = c("FAM", "JOE", "TAMRA", "ROX", "Cy5", "Cy5.5", "SyproOrange")))
-}
-
-convert_numerics <- function( vec ) {
-  
-  if(all(varhandle::check.numeric(vec))){
-    # convert the vector to numeric
-    vec <- as.numeric(vec)
-  }
-  vec
-}
-
- make_string_list <-  function(...) {
-  args <- ensyms(...)
-  purrr::map(args, rlang::as_string) %>% as_vector()
-}
-```
-
-Read in and format the screening data.
-```{r}
-find_tmas <- function(by_variable_raw, 
-                      low_T = 25,
-                      high_T = 94,
-                      n_meas = 69,
-                      filter_criteria) {
-                          # get the filtering and smoothing parameters
-                                n2r <- make_temp_n2r(range(low_T:high_T)) 
-                                win3d <- floor(3/((n2r(1) - n2r(0))/n_meas))
-                                if ( win3d < 5 ) { win3d <<- 5 }
-                                
-                                peak_finder_nest <<- make_peak_finder_nest( win3d )
-                                sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width( win3d ))
-                                
-                               
-                              sgfilt_nest <- sgfilt_set_n(n_ = 13)
-                        
-                          # fit only the channels which have signal
-                          by_variable <- by_variable_raw %>%
-                                        filter(!!rlang::parse_expr( filter_criteria))
-                          
-                          
-                          df_tms <- by_variable %>% #df_int %>% # add the first derivative Tms
-                                    plyr::mutate(sgd1 = purrr::map(data, sgfilt_nest, m_ = 1)) %>% # add the first derivative data
-                                    plyr::mutate(dRFU_tma = as_vector(purrr::map2(data, sgd1, Tm_by_dRFU))) # find the dRFU tmas
-                        
-                          # fit to all models        
-                          start_pars <- get_start_pars(by_variable)
-                          s1_list <- model_all(s1_model, "s1_pred", start_pars, win3d) # requires "well" and "condition" columns
-                          s1_d_list <- model_all(s1_d_model, "s1_d_pred", start_pars, win3d)
-                          s2_list <- model_all(s2_model, "s2_pred", start_pars, win3d)
-                          s2_d_list <- model_all(s2_d_model, "s2_d_pred", start_pars, win3d)
-                          
-                          save_list <- list(by_variable = by_variable,
-                                            df_tms = df_tms,
-                                            start_pars = start_pars,
-                                            s1_list = s1_d_list,
-                                            s1_d_list = s1_d_list,
-                                            s2_list = s2_list,
-                                            s2_d_list = s2_d_list)
-}
-
-condition_qTower_raw <- function(DATA_PATH, LAYOUT_PATH, screen_name, low_T) {
-                             df_raw <- read_qTower(DATA_PATH)  %>%
-                                          mutate(Temperature = .$Temperature + (low_T-1))%>% # convert cycles to temperature
-                                          left_join(make_layout(LAYOUT_PATH))%>% # add the layout
-                                          unite(variable, c(well, channel), remove = FALSE) %>% # add a unique column
-
-                                          group_by(variable)  %>%
-                                          mutate(Temperature_norm = BBmisc::normalize(Temperature, method = "range", range = c(0,1)), # normalize each trace 0 to 1
-                                                 value_norm = BBmisc::normalize(value, method = "range", range = c(0,1))) %>%
-                                          ungroup() %>%
-
-                                        group_by(compound, channel) %>%
-                                        mutate(value_norm_by_comp = BBmisc::normalize(value, method = "range", range = c(0,1))) %>% # normalize each compound, to include EBPs in range
-                                        ungroup()
-}
- 
- process_screen <- function(DATA_PATH, 
-                            LAYOUT_PATH, 
-                            screen_name,
-                            low_T = 25,
-                            high_T = 94,
-                            n_meas = 69,
-                            ignore_vars = "",
-                            fit_if = c("TAMRA", "FAM", "SyproOrange"),
-                            save_fits = TRUE,
-                            save_path = "",
-                            save_name = "fits.rds"
-                            ) {
-   
-                        df_raw <- condition_qTower_raw(DATA_PATH, LAYOUT_PATH, screen_name, low_T) 
-
-                        by_variable <- df_raw %>%
-                                        nest(data = c(Temperature, value, channel, Temperature_norm, value_norm, value_norm_by_comp))
-
-                        fits <- find_tmas(by_variable_raw = by_variable,
-                                                low_T = low_T,
-                                                high_T = high_T,
-                                                n_meas = n_meas,
-                                                filter_criteria = fit_if)
-
-                        outlist <- list(df_raw = df_raw,
-                                        by_variable = by_variable,
-                                        fits = fits)
-                        
-
-                         if (save_fits == TRUE) { paste0(SAVE_PATH, save_name)  %>% write_rds( . , x = outlist) }
-
-                       outlist # always return this
-
- }
- 
- 
- ### a closure to create specific screening functions, where many plates are run and processed in the same way
- make_screen_process <- function(low_T = 25,
-                            high_T = 94,
-                            n_meas = 69,
-                            ignore_vars = "protein == Empty",
-                            fit_if = "channel_f %in% c('TAMRA', 'FAM', 'SyproOrange') & protein == 'SP0150_Nsp3'",
-                            save_path = SAVE_PATH) {
-  
-   # the defined function contains all argument which you want the output function to have    
-   function(DATA_PATH, 
-               LAYOUT_PATH,
-                screen_name,
-                save_fits = TRUE,
-                save_name
-                ) {
-     # this function includes assignments for all of teh arguments passed to the closure, which will be set in the resulting function
-                   process_screen(DATA_PATH, 
-                          LAYOUT_PATH,
-                          screen_name,
-                          save_fits = TRUE,
-                          save_name,
-                          low_T = low_T,
-                          high_T = high_T,
-                          n_meas = n_meas,
-                          ignore_vars = ignore_vars,
-                          fit_if = fit_if,
-                          save_path = save_path)
-         
-       } 
- }
- 
-```
-
-```{r}
+# create closure for this specific screen
 MAIN_PATH <- "data/Exp0866--20200811_Nsp3_T004_SYPRO_fragment_all_batch_retest/"
 LAYOUT_PATH <- MAIN_PATH %>% paste0("layouts/")
 SAVE_PATH <- MAIN_PATH %>% paste0("out/")
 
+process_FAM_screen <- make_screen_process(low_T = 25,
+                                                high_T = 94,
+                                                n_meas = 69,
+                                                ignore_vars = "protein == 'Empty'",
+                                                fit_if = "channel_f %in% c('FAM') & protein == 'SP0150_Nsp3'",
+                                                save_path = SAVE_PATH,
+                                                temp_range = c(25, 84)) 
 
-process_866_screen <- make_screen_process(low_T = 25,
-                                          high_T = 94,
-                                          n_meas = 69,
-                                          ignore_vars = "protein == Empty",
-                                          fit_if = "channel_f %in% c('TAMRA', 'FAM', 'SyproOrange') & protein == 'SP0150_Nsp3'",
-                                          save_path = SAVE_PATH) 
-
-SYPRO_b2 <- process_866_screen(DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_SYPRO.csv"), 
-                               LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"),
-                               screen_name = "Exp866_batch2_SYPRO",
-                               save_fits = TRUE,
-                               save_name = "Exp866_batch2_SYPRO_fits.rds")
-
-test <-  process_screen(DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_SYPRO.csv"), 
-                            LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"), 
-                            screen_name = "Exp866_batch1_SYPRO",
-                            low_T = 25,
-                            high_T = 94,
-                            n_meas = 69,
-                            ignore_vars = "protein == Empty",
-                            fit_if = "channel_f %in% c('TAMRA', 'FAM', 'SyproOrange') & protein == 'SP0150_Nsp3'",
-                            save_fits = TRUE,
-                            save_path = SAVE_PATH,
-                            save_name = "Exp866_batch1_SYPRO_fits.rds"
-                            )
-test$df_raw
-# This message is displayed once per session. # but actually it gets displayed a lot?
-# Note: Using an external vector in selections is ambiguous.
-# ℹ Use `all_of(sub_info)` instead of `sub_info` to silence this message.
-# ℹ See <https://tidyselect.r-lib.org/reference/faq-external-vector.html>.
-
+process_TAMRA_screen <- make_screen_process(low_T = 25,
+                                                high_T = 94,
+                                                n_meas = 69,
+                                                ignore_vars = "protein == 'Empty'",
+                                                fit_if = "channel_f %in% c('TAMRA') & protein == 'SP0150_Nsp3'",
+                                                save_path = SAVE_PATH,
+                                                temp_range = c(25, 84)) 
 ```
 
+```{r}
+# when you've messed up and need to swap out your layout. Ultimately, this really should not be used, as layout shouldn't be added during fitting (fitting results need not update when the layout does)
+swap_layout <- function(df_raw, new_layout_file) {
+  df_raw %>%
+    select(variable:channel_f,Temperature_norm:value_norm_by_comp ) %>%
+    left_join(make_layout(new_layout_file), by = "well")
+  
+}
+
+T004_batch_1$df_raw <- swap_layout(T004_batch_1$df_raw, LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"))
+SYPRO_batch_1$df_raw <- swap_layout(SYPRO_batch_1$df_raw, LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"))
+
+T004_batch_2$df_raw <- swap_layout(T004_batch_2$df_raw, LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"))
+SYPRO_batch_2$df_raw <- swap_layout(SYPRO_batch_2$df_raw, LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"))
+```
 
 Quick data exploration
 ```{r}
-quick_look <- function(df, .filter_vars, color_var, plot_title = "", linetype_values,
-                       xvar = Temperature, yvar = value) {
-
+##### work this into the processing script!!!! you should be able to checkpoint during processing to pass a temperature filter if necessary prior to fitting 
+quick_look <- function(df, 
+                       filter_vars, 
+                       color_var, 
+                       plot_title = "", 
+                       linetype_values,
+                       xvar = Temperature, 
+                       yvar = value
+                       ) {
   ### from advanced R, and probably a reason to think about the way we do flexible filtering right now
   # If you find yourself working with strings containing code very frequently, you should reconsider your process. Read Chapter 19 and consider whether you can generate expressions using quasiquotation more safely.
   
@@ -369,43 +170,461 @@ quick_look <- function(df, .filter_vars, color_var, plot_title = "", linetype_va
   
 }
 
-quick_look(df_raw, 
-           .filter_vars = "channel == 'FAM' & dye == 'T004' & compound_group != 'test'", 
+quick_look(T004_batch_1$df_raw %>% filter( between(Temperature, 30, 86), protein != "Empty") , 
+           .filter_vars = "channel == 'FAM'", # & dye == 'T004' & compound_group != 'test'", 
            color_var = compound_group, 
-           plot_title = "Exp0858 Control Conditions, qTower FAM errored, unusable data \ndye = T004, channel =  FAM",
-           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
-
-quick_look(df_raw, 
-           .filter_vars = "channel == 'FAM' & dye == 'T004' ", 
-           color_var = compound_group, 
-           plot_title = "Exp0858 All Conditions, qTower FAM errored, unusable data \ndye = SYPRO, channel =  TAMRA",
-           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
-
-
-quick_look(df_raw, 
-           .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test'", 
-           color_var = compound_group, 
-           plot_title = "Exp0858 Control Conditions \ndye = SYPRO, channel =  TAMRA",
-           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
-
-quick_look(df_raw, 
-           .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' ", 
-           color_var = compound_group, 
-           plot_title = "Exp0858 All Conditions \ndye = SYPRO, channel =  TAMRA",
-           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"))# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
-
-quick_look(df_raw, 
-           .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' ", #& protein == 'Nsp3'
-           color_var = compound_group,
-           plot_title = "Exp0858 All Conditions \ndye = SYPRO, channel =  TAMRA",
-           linetype_values  = c("Nsp3" = "solid", "Buffer" = "dotted"),
-           xvar = Temperature_norm,
-           yvar = value_norm_by_comp)# .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound_group != 'test' ")
+           plot_title = "Exp0866 T004 with Batch 2 compounds  \ndye = T004, channel =  FAM",
+           linetype_values  = c( "SP0150_Nsp3" = "solid", "Buffer" = "dotted"))
 ```
+
+
+```{r}
+##### BIG PROBLEM TO FIX: WELL IS CONSIDERED THE UNIQUE VARIABLE HERE!!!!! so if you're doing multiple channels, everything falls apart.... silently ############
+
+#### for now, only process one channel at a time ###
+
+## ultimately, it would be good t be able to read in an excel file with all of these arguments, and apply the processing screen to them appropriately to avoid this n-plate duplication
+
+SYPRO_batch_1 <- process_TAMRA_screen (DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_SYPRO.csv"), 
+                                           LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"),
+                                           screen_name = "Exp866_batch1_SYPRO",
+                                           save_fits = TRUE,
+                                           save_name = "Exp866_batch1_SYPRO_fits.rds")
+
+SYPRO_batch_2 <- process_TAMRA_screen (DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_SYPRO.csv"), 
+                                         LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"),
+                                         screen_name = "Exp866_batch2_SYPRO",
+                                         save_fits = TRUE,
+                                         save_name = "Exp866_batch2_SYPRO_fits.rds")
+
+T004_batch_1 <- process_FAM_screen (DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch1_daughter_865p1_T004.csv"), 
+                                         LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"),
+                                         screen_name = "Exp866_batch1_T004",
+                                         save_fits = TRUE,
+                                         save_name = "Exp866_batch1_T004_fits.rds")
+
+T004_batch_2 <- process_FAM_screen (DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20200811_Nsp3_mac1_fragment_batch2_daughter_865p2_T004.csv"), 
+                                         LAYOUT_PATH = LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"),
+                                         screen_name = "Exp866_batch2_T004",
+                                         save_fits = TRUE,
+                                         save_name = "Exp866_batch2_T004_fits.rds")
+
+# This message is displayed once per session. # but actually it gets displayed a lot?
+# Note: Using an external vector in selections is ambiguous.
+# ℹ Use `all_of(sub_info)` instead of `sub_info` to silence this message. ## Track these lines down
+# ℹ See <https://tidyselect.r-lib.org/reference/faq-external-vector.html>.
+```
+
+Checking up on each of the datasets
+```{r}
+layout_path_1 <- LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv")
+layout_path_2 <- LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv")
+
+T004_batch_1$df_raw %>% head()
+
+T004_batch_1$by_variable %>% 
+  group_by(well) %>%
+  select(well, channel_f) %>%
+  tally() # 5 channels for everything
+
+
+T004_batch_1$by_variable %>%
+  group_by(compound_group) %>%
+  tally() %>%
+  mutate(per_channel = n/5) %>%
+  mutate(with_protein = per_channel/2) # # looks right: 4 of each control + 120 test compounds
+
+T004_batch_2$by_variable %>%
+  group_by(compound_group) %>%
+  tally() %>%
+  mutate(per_channel = n/5) %>%
+  mutate(with_protein = per_channel/2) # looks right: 6 of ecah control + 150 test compounds 
+
+SYPRO_batch_1$by_variable %>%
+  group_by(compound_group) %>%
+  tally() %>%
+  mutate(per_channel = n/5) %>%
+  mutate(with_protein = per_channel/2) # looks right: 4 of each control + 120 test compounds 
+
+SYPRO_batch_2$by_variable %>%
+  group_by(compound_group) %>%
+  tally() %>%
+  mutate(per_channel = n/5) %>%
+  mutate(with_protein = per_channel/2) # looks right: 6 of ecah control + 150 test compounds 
+
+
+T004_batch_1$fits$s1_list$tm_models_all %>%
+  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
+  group_by(compound_group) %>%
+  tally() # 4, 4, 120
+
+T004_batch_1$fits$s1_list$tm_models_all %>%
+  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
+  distinct() %>%
+  nrow() # 136: with 8 empties, this checks out
+
+T004_batch_1$fits$s1_list$tm_models_all %>%
+  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
+  group_by(compound_group) %>%
+  tally() # 4, 4, 120, 8 empties
+
+
+T004_batch_1$fits$s1_d_list$tm_models_all %>%
+  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
+  distinct() %>%
+  nrow() # 136: with 8 empties, this checks out
+
+T004_batch_1$fits$s1_d_list$tm_models_all %>%
+  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
+  group_by(compound_group) %>%
+  tally() # 4, 4, 120, 8 empties
+
+T004_batch_2$fits$s1_d_list$tm_models_all %>%
+  left_join(make_layout(layout_path_2), by = c("well", "condition")) %>%
+  distinct() %>%
+  nrow() # 162: with 8 empties, this checks out
+
+T004_batch_2$fits$s1_d_list$tm_models_all %>%
+  left_join(make_layout(layout_path_2), by = c("well", "condition")) %>%
+  group_by(compound_group) %>%
+  tally() # 6, 6, 150, 0 empties
+```
+
+```{r}
+T004_batch_2$fits$s1_d_list$tm_models_all # has well and condition
+T004_batch_2$fits$s1_d_list$tm_table_models # is averaged, and not what you want here!!
+T004_batch_2$fits$s1_d_list$df_BIC # has well and condition, is not averaged, and is what you want
+T004_batch_2$fits$df_tms # has wells, and dRFU tms 
+
+# well is unique here! use that
+merge_elements <- function(in_list) {
+  df_list <-c("tm_models_all", "df_BIC")
+  model_list <- c("s1_list", "s1_d_list", "s2_list", "s2_d_list")
+  
+  out <- list()
+  for (df_element in df_list) {
+
+    int <- lapply(model_list, function(x) in_list$fits[[x]][[df_element]])  %>%
+              bind_rows() # bind together extracted df_element from all four models
+
+    out <- list(out, int) # add that df_element to a list
+  }
+  
+ dRFU_tmas  <- lapply(model_list, function(x) in_list$fits[["df_tms"]]) %>%
+    bind_rows() %>%
+
+    mutate(which_model = "dRFU") %>%
+   rename(mean_tma1 = "dRFU_tma") %>%
+      select(well, which_model, condition, mean_tma1) 
+  
+out_list <- list("model_tmas" = out[[1]][[2]],
+                 "dRFU_tmas" = dRFU_tmas,
+                 "df_BIC" = out[[2]])
+
+}
+
+T004_batch_2_fits <- merge_elements(T004_batch_2)
+T004_batch_2_fits$dRFU_tmas
+T004_batch_2_fits$model_tmas
+
+
+```
+
+
+
+
+Re-entry: read in the processe screens
+```{r}
+# T004_batch_1 = readRDS(MAIN_PATH %>% paste0("out/Exp866_batch1_T004_fits.rds"))
+# T004_batch_2 = readRDS(MAIN_PATH %>% paste0("out/Exp866_batch2_T004_fits.rds"))
+# SYPRO_batch_1 = readRDS(MAIN_PATH %>% paste0("out/Exp866_batch1_SYPRO_fits.rds"))
+# SYPRO_batch_2 = readRDS(MAIN_PATH %>% paste0("out/Exp866_batch2_SYPRO_fits.rds"))
+```
+
+
+This should be better functionalized, but is code worth continuing to work on!! don't just rewrite this bit!
+```{r}
+#### add this to the final processing script, ultimately! This step should not be generated---it is clearning up a data org. mess made by poor planning in an earlier function
+merge_elements <- function(in_list, element) {
+  
+   lapply(c(4:7), function(x) in_list$fits[[x]][[element]])    %>%
+     bind_rows()
+ 
+}
+
+merge_and_add_layout <- function(batch_list, element_number, layout_file, join_layout_by) {
+  out_df <- merge_elements(batch_list, element_number) %>%
+              left_join(make_layout(layout_file), by = join_layout_by) #make_layout(LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv")), by = "condition")
+}
+
+
+
+t4_tms <- bind_rows( merge_and_add_layout(batch_list = T004_batch_1, 
+                                 element_number = 4, 
+                                 layout_file = layout_path_1, 
+                                 join_layout_by = "condition"),
+                     
+                     merge_and_add_layout(batch_list = T004_batch_2, 
+                                 element_number = 4, 
+                                 layout_file = layout_path_2, 
+                                 join_layout_by = "condition")) %>%
+                      filter(compound_group != "Empty")%>%
+  distinct(condition, well, which_model, .keep_all = TRUE) 
+
+t4_BICs <- bind_rows( merge_and_add_layout(batch_list = T004_batch_1, 
+                                 element_number = 2, 
+                                 layout_file = layout_path_1, 
+                                 join_layout_by = c("well","condition")),
+                     
+                     merge_and_add_layout(batch_list = T004_batch_2, 
+                                 element_number = 2, 
+                                 layout_file = layout_path_2, 
+                                 join_layout_by = c("well","condition")))%>%
+                      filter(compound_group != "Empty")%>%
+  distinct(condition, well, which_model, .keep_all = TRUE) 
+
+
+SYPRO_tms <- bind_rows( merge_and_add_layout(batch_list = SYPRO_batch_1, 
+                                 element_number = 4, 
+                                 layout_file = layout_path_1, 
+                                 join_layout_by = "condition"),
+                     
+                     merge_and_add_layout(batch_list = SYPRO_batch_2, 
+                                 element_number = 4, 
+                                 layout_file = layout_path_2, 
+                                 join_layout_by = "condition"))%>%
+                      filter(compound_group != "Empty")%>%
+  distinct(condition, well, which_model, .keep_all = TRUE) 
+
+
+SYPRO_BICs <- bind_rows( merge_and_add_layout(batch_list = SYPRO_batch_1, 
+                                 element_number = 2, 
+                                 layout_file = layout_path_1, 
+                                 join_layout_by = c("well","condition")),
+                     
+                     merge_and_add_layout(batch_list = SYPRO_batch_2, 
+                                 element_number = 2, 
+                                 layout_file = layout_path_2, 
+                                 join_layout_by = c("well","condition")))%>%
+                      filter(compound_group != "Empty") %>%
+  distinct(condition, well, which_model, .keep_all = TRUE) 
+
+
+SYPRO_fits <- left_join(SYPRO_tms, SYPRO_BICs %>% select(condition, which_model, BIC, well), by = c("well","condition", "which_model")) %>% ungroup()
+T004_fits <- left_join(t4_tms, t4_BICs %>% select(condition, which_model, BIC, well), by = c("well","condition", "which_model")) %>% ungroup()
+
+# make sure everything has the same number of rows
+t4_BICs %>% nrow() == t4_tms %>% nrow() 
+t4_tms %>% nrow() == T004_fits %>% nrow() 
+SYPRO_tms %>% nrow() == SYPRO_BICs %>% nrow() 
+SYPRO_BICs %>% nrow() == SYPRO_fits %>% nrow()
+```
+
+Make some plots using model tmas
+```{r}
+
+make_tm_table <- function( model_results, which_model) {
+  
+  df <- model_results %>%
+        filter(which_model == which_model,
+               compound_group != "Empty") %>%
+        select(compound_group, mean_tma1, BIC) %>%
+        group_by(compound_group) %>%
+        summarise(mean_tma = mean(mean_tma1),
+                  sd_tma = sd(mean_tma1),
+                  mean_BIC = mean(BIC),
+                  sd_BIC = sd(BIC))
+  
+  out <- list(df = df,
+              DMSO_tm = as_vector(df[2, "mean_tma"]),
+              ADP_ribose_tm = as_vector(df[1, "mean_tma"]),
+              DMSO_sd = as_vector(df[2, "sd_tma"]),
+              ADP_ribose_sd = as_vector(df[1, "sd_tma"]),
+              
+              test_tm = as_vector(df[3, "mean_tma"])
+              
+              )
+  
+}
+
+## T004
+T004_fits %>% 
+  filter(compound_group == "DMSO",
+         which_model == "s1_d_pred") #head()
+# 50.6 +/- 0.3
+
+T004_fits %>% 
+  filter(compound_group == "ADP_ribose",
+         which_model == "s1_d_pred") #head()
+# 54.0 +/- 0.1
+
+T004_fits %>% 
+  filter(compound_group == "test",
+         between(mean_tma1 , 45, 55),
+         which_model == "s1_d_pred") %>%
+          summarise(mean_tma = mean(mean_tma1),
+                    sd_tma = sd(mean_tma1))#head()
+# 50.13 +/- 0.8
+
+## SYPRO
+SYPRO_fits %>% 
+  filter(compound_group == "DMSO",
+         which_model == "s1_d_pred") #head()
+# 52 +/-	0.3	
+
+SYPRO_fits %>% 
+  filter(compound_group == "ADP_ribose",
+         which_model == "s1_d_pred") #head()
+# 54.9 +/-	0.1
+
+SYPRO_fits %>% 
+  filter(compound_group == "test",
+         between(mean_tma1 , 45, 55),
+         which_model == "s1_d_pred") %>%
+          summarise(mean_tma = mean(mean_tma1),
+                    sd_tma = sd(mean_tma1))#head()
+# 51.11873 +/- 0.8419597
+
+# of this i am deeply  NOT proud!!!
+# functionalize this!!!
+summary_tms <- tribble(
+  ~dye,  ~mean_DMSO, ~sd_DMSO, ~mean_ADP_ribose, ~sd_ADP_ribose, ~mean_test,   ~sd_test,
+  "T004",  50.6,        0.3,        54.0,          0.1,              50.13,       0.80,
+  "SYPRO", 52.0,        0.3,        54.9,          0.1,              51.11,       0.84
+)
+
+summary_tms 
+```
+Screening figures with hlines
+```{r}
+
+
+SYPRO_fits %>%
+  filter(compound_group != "Empty",
+               which_model == "s1_d_pred") %>%
+ ggplot(aes(x = compound, y = mean_tma1, color = compound_group, group = compound, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+  scale_shape_manual(values = c(16, 16, 16, 1, 16, 1, 1)) +
+  scale_size_manual(values = c(3, 3, 3, 1.5, 3, 1.5, 1)) +
+  geom_point( alpha = 0.5) +
+  geom_line(size=  0.5, alpha = 0.5) +
+    theme_bw() +
+  theme(axis.text.x = element_blank()) +
+  ylim(c(40, 55)) +
+  geom_hline( yintercept = summary_tms$mean_DMSO[2], color = "grey") +
+    geom_hline( yintercept = summary_tms$mean_test[2] , color = "red") +
+  geom_hline( yintercept = summary_tms$mean_test[2] + 3*summary_tms$sd_DMSO[2], color = "red") +
+  geom_hline( yintercept = summary_tms$mean_test[2] - 3*summary_tms$sd_DMSO[2], color = "red") +
+  labs(title = "SYPRO Model 2 Tmas") -> SYPRO_p
+
+
+T004_fits %>%
+        filter(compound_group != "Empty",
+               which_model == "s1_d_pred") %>%
+         ggplot(aes(x = compound, y = mean_tma1, color = compound_group, group = compound, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+          scale_shape_manual(values = c(16, 16, 16, 1, 16, 1, 1)) +
+          scale_size_manual(values = c(3, 3, 3, 1.5, 3, 1.5, 1)) +
+          geom_point( alpha = 0.5) +
+          geom_line(size=  0.5, alpha = 0.5) +
+            theme_bw() +
+          theme(axis.text.x = element_blank()) +
+         # ylim(c(40, 55)) +
+          geom_hline( yintercept = summary_tms$mean_DMSO[1], color = "grey") +
+            geom_hline( yintercept = summary_tms$mean_test[1] , color = "red") +
+          geom_hline( yintercept = summary_tms$mean_test[1] + 3*summary_tms$sd_DMSO[1], color = "red") +
+          geom_hline( yintercept = summary_tms$mean_test[1] - 3*summary_tms$sd_DMSO[1], color = "red") +
+          labs(title = "T004 Model 2 Tmas") -> T4_p
+
+all_fits <-bind_rows(T004_fits %>% mutate(dye = "T004"),
+                     SYPRO_fits %>% mutate(dye = "SYPRO"))
+
+all_fits %>%
+        filter(compound_group != "Empty",
+               which_model == "s1_d_pred") %>%
+         ggplot(aes(x = compound, y = mean_tma1, color = dye, group = compound, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+          # scale_shape_manual(values = c(16, 16, 16, 1, 16, 1, 1)) +
+          # scale_size_manual(values = c(3, 3, 3, 1.5, 3, 1.5, 1)) +
+          scale_shape_manual(values = c(1, 1, 1, 16, 1, 16, 16)) +
+          scale_size_manual(values = c(1.5, 1.5, 1.5, 3, 1.5, 3, 1)) +
+          geom_point( alpha = 0.5) +
+          geom_line(size=  0.5, alpha = 0.5) +
+            theme_bw() +
+          theme(axis.text.x = element_blank()) +
+         ylim(c(40, 55)) +
+          # geom_hline( yintercept = summary_tms$mean_DMSO[1], color = "grey") +
+          #   geom_hline( yintercept = summary_tms$mean_test[1] , color = "red") +
+          # geom_hline( yintercept = summary_tms$mean_test[1] + 3*summary_tms$sd_DMSO[1], color = "red") +
+          # geom_hline( yintercept = summary_tms$mean_test[1] - 3*summary_tms$sd_DMSO[1], color = "red") +
+          labs(title = " Model 2 Tmas") -> p
+ggsave("all_dyes_tms.pdf", p,width = 15, height = 4)
+
+p +
+  facet_wrap(~dye, ncol = 1) -> p2
+ggsave("all_dyes_facet_tms.pdf", p2,width = 15, height = 6)
+```
+
+```{r}
+all_fits %>%
+ # filter(compound_group == "test") %>%
+  select(compound, compound_group, concentration, mean_tma1, dye, condition, well, which_model) %>%
+  pivot_wider(names_from = dye, values_from = mean_tma1)  %>%
+#    bind_rows(all_controls) %>%
+  # ggplot(aes(y = T004, x = SYPRO,  group = compound, color = compound_group, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+   ggplot(aes(y = T004, x = SYPRO,  group = compound, color = compound_group)) +
+  # scale_shape_manual(values = c(16, 16, 1, 1, 1, 1)) +
+  # scale_size_manual(values = c(2, 2, 3, 1.5, 3, 1.5)) +
+  geom_line(size = 0.5, alpha = 0.7) +
+  #ggplot(aes(x = T004, y = SYPRO)) +
+  geom_point(alpha = 0.7) +
+  coord_fixed() +
+  ylim(c(47.5, 55)) +
+  xlim(c(47.5, 55)) +
+  geom_abline(slope = 1, intercept = 0, alpha = 0.5)
+```
+
+```{r}
+T004_model_results %>% 
+  arrange(which_model)
+  select(which_model, BIC, condition, well) %>%
+  arrange(which_model)
+%>%
+  pivot_wider(names_from = which_model, values_from = BIC)
+```
+
+
+
+
+```{r}
+.protein_name <- "SP0150_Nsp3"
+
+  protein_wells <- T004_batch_2$df_raw %>%
+                      group_by(channel, compound, well, compound_group, protein) %>%
+                      nest() %>%
+                      select(-data) %>%
+                      arrange(channel, compound,  compound_group, protein) %>%
+                    
+                      filter(compound_group == "test") %>% # this is something we'll need to fix later... 
+                      pivot_wider(  names_from = protein, values_from = well) %>% #### YOU NEED THE NAME OF YOUR PROTEIN HERE!
+                      mutate(protein_well = {{.protein_name}}) %>%
+                      pivot_longer(protein_well, values_to = "protein_well") %>%
+                      extract({{.protein_name}}, into = c("protein_row", "protein_column"), "^([A-Z]+)(\\d+)$")
+  
+  df_protein_wells_merge <- T004_batch_2$df_raw %>%
+  left_join( . , protein_wells, by = make_string_list(channel, compound,  compound_group))
+
+
+
+  df_control <- T004_batch_2$df_raw %>%
+                filter(!!rlang::parse_expr(filter_control_vars)) %>%
+                select(-{{.drop_control_cols}}) %>%
+                filter( !!rlang::parse_expr(.filter_vars) ) %>%
+                mutate_all(convert_numerics)
+```
+
+
 Plot all of the raw screening data, overlaying controls and test compounds. 
 Arrange the plots by their position in the plate. 
 ```{r}
-full_plate_view <- function(df, 
+full_plate_view <- function(df_raw, 
                             .filter_vars, 
                             .color_var = compound_group, 
                             linetype_values,
@@ -414,17 +633,31 @@ full_plate_view <- function(df,
                             plot_title = "", 
                             .xvar = Temperature, 
                             .yvar = value_norm_by_comp,
+                            .protein_name,  # the name of the protein in the layout
                             filter_control_vars = "compound_group != 'test' & compound != 'Empty'",
                             .drop_control_cols = c(protein_row, protein_column) #c(row, columns)
                        ) {
   
+   protein_wells <- df_raw %>%
+                      group_by(channel, compound, well, compound_group, protein, concentration) %>%
+                      nest() %>%
+                      select(-data) %>%
+                      arrange(channel, compound,  compound_group, protein, concentration) %>%
+                    
+                      filter(compound_group == "test") %>% # this is something we'll need to fix later... 
+                      pivot_wider(  names_from = protein, values_from = well) %>% #### YOU NEED THE NAME OF YOUR PROTEIN HERE!
+                      mutate(protein_well = {{.protein_name}}) %>%
+                      pivot_longer(protein_well, values_to = "protein_well") %>%
+                      extract({{.protein_name}}, into = c("protein_row", "protein_column"), "^([A-Z]+)(\\d+)$")
+  
+  df <- df_raw %>%
+  left_join( . , protein_wells, by = make_string_list(channel, compound,  compound_group, concentration))
+
   df_control <- df %>%
                 filter(!!rlang::parse_expr(filter_control_vars)) %>%
                 select(-{{.drop_control_cols}}) %>%
-    filter( !!rlang::parse_expr(.filter_vars) ) %>%
-    mutate_all(convert_numerics)
-  
-  df_control
+                filter( !!rlang::parse_expr(.filter_vars) ) %>%
+                mutate_all(convert_numerics)
 
   df %>%
     filter( !!rlang::parse_expr(.filter_vars) ) %>%
@@ -435,7 +668,7 @@ full_plate_view <- function(df,
 
     ggplot(aes(x = {{.xvar}}, y = {{.yvar}}, group = variable, color = {{.color_var}}, linetype = protein)) +
 
-        geom_line(data = df_control, aes(x = {{.xvar}}, y = {{.yvar}}, group = variable, color = {{.color_var}}, linetype = protein), size = 0.1, alpha = 0.3) +
+    geom_line(data = df_control, aes(x = {{.xvar}}, y = {{.yvar}}, group = variable, color = {{.color_var}}, linetype = protein), size = 0.1, alpha = 0.3) +
     scale_color_manual(values = c("DMSO" = "blue", "ADP_ribose" = "black", "test" = "red")) +
         
     geom_line(alpha = 1) +
@@ -445,137 +678,165 @@ full_plate_view <- function(df,
 }
 
 
-protein_wells <- df_raw %>%
-  filter(dye == 'SYPRO',
-  compound != 'Empty' ) %>%
-  group_by(dye, channel, compound, well, compound_group, protein) %>%
-  nest() %>%
-  select(-data) %>%
-  arrange(dye, channel, compound,  compound_group, protein) %>%
 
-  filter(compound_group == "test") %>% # this is something we'll need to fix later... 
-  pivot_wider(  names_from = protein, values_from = well) %>%
-  mutate(protein_well = Nsp3) %>%
-  pivot_longer(protein_well, values_to = "protein_well") %>%
-  extract(Nsp3, into = c("protein_row", "protein_column"), "^([A-Z]+)(\\d+)$")
-  
-df_protein_wells_merge <- df_raw %>%
-    filter(dye == 'SYPRO',
-  compound != 'Empty' ) %>%
-  left_join( . , protein_wells, by = make_string_list(dye, channel, compound,  compound_group))
+full_plate_view(df = T004_batch_2$df_raw, 
+                .filter_vars = "channel == 'FAM'", # & dye == 'SYPRO' & compound != 'Empty' ", 
+
+                plot_title = "Exp0866--20200815_Nsp3_fragment_batch2_all_compounds_T004_FAM", 
+                linetype_values = c("SP0150_Nsp3" = "solid", "Buffer" = "dashed"),
+                 .protein_name = "SP0150_Nsp3"
+                ) %>%
+      ggsave(paste0(SAVE_PATH, "Exp0866--20200815_Nsp3_fragment_batch2_all_compounds_T004_FAM.pdf"), . , width = 25, height = 7 )
 
 
+full_plate_view(df = T004_batch_1$df_raw, 
+                .filter_vars = "channel == 'FAM'", # & dye == 'SYPRO' & compound != 'Empty' ", 
 
-p <- full_plate_view(df = df_protein_wells_merge, 
-                .filter_vars = "channel == 'TAMRA' & dye == 'SYPRO' & compound != 'Empty' ", 
+                plot_title = "Exp0866--20200815_Nsp3_fragment_batch1_all_compounds_T004_FAM", 
+                linetype_values = c("SP0150_Nsp3" = "solid", "Buffer" = "dashed"),
+                 .protein_name = "SP0150_Nsp3"
+                ) %>%
+      ggsave(paste0(SAVE_PATH, "Exp0866--20200815_Nsp3_fragment_batch1_all_compounds_T004_FAM.pdf"), . , width = 25, height = 7 )
 
-                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_TAMRA", 
-                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
-                # .xvar = Temperature, 
-                # .yvar = value_norm_by_comp,
-                # filter_control_vars,
-                # .drop_control_cols
-                )
+full_plate_view(df = SYPRO_batch_2$df_raw, 
+                .filter_vars = "channel == 'TAMRA'", # & dye == 'SYPRO' & compound != 'Empty' ", 
 
-ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_TAMRA.pdf", p, width = 15, height = 3 )
+                plot_title = "Exp0866--20200815_Nsp3_fragment_batch2_all_compounds_SYPRO_TAMRA", 
+                linetype_values = c("SP0150_Nsp3" = "solid", "Buffer" = "dashed"),
+                 .protein_name = "SP0150_Nsp3"
+                ) %>%
+      ggsave(paste0(SAVE_PATH, "Exp0866--20200815_Nsp3_fragment_batch2_all_compounds_SYPRO_TAMRA.pdf"), . , width = 25, height = 7 )
 
-p2 <- full_plate_view(df = df_protein_wells_merge, 
-                .filter_vars = "channel == 'JOE' & dye == 'SYPRO' & compound != 'Empty' ", 
+full_plate_view(df = SYPRO_batch_1$df_raw, 
+                .filter_vars = "channel == 'FAM'", # & dye == 'SYPRO' & compound != 'Empty' ", 
 
-                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_JOE", 
-                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
-                # .xvar = Temperature, 
-                # .yvar = value_norm_by_comp,
-                # filter_control_vars,
-                # .drop_control_cols
-                )
-
-ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_JOE.pdf", p2, width = 15, height = 3 )
-
-p3 <- full_plate_view(df = df_protein_wells_merge, 
-                .filter_vars = "channel == 'ROX' & dye == 'SYPRO' & compound != 'Empty' ", 
-
-                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_ROX", 
-                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
-                # .xvar = Temperature, 
-                # .yvar = value_norm_by_comp,
-                # filter_control_vars,
-                # .drop_control_cols
-                )
-
-ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_ROX.pdf", p3, width = 15, height = 3 )
-
-p4 <- full_plate_view(df = df_protein_wells_merge, 
-                .filter_vars = "channel == 'Cy5' & dye == 'SYPRO' & compound != 'Empty' ", 
-
-                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy5", 
-                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
-                # .xvar = Temperature, 
-                # .yvar = value_norm_by_comp,
-                # filter_control_vars,
-                # .drop_control_cols
-                )
-
-ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy5.pdf", p4, width = 15, height = 3 )
-
-p5 <- full_plate_view(df = df_protein_wells_merge, 
-                .filter_vars = "channel == 'Cy5.5' & dye == 'SYPRO' & compound != 'Empty' ", 
-
-                plot_title = "Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy5.5", 
-                linetype_values = c("Nsp3" = "solid", "Buffer" = "dotted"),
-                # .xvar = Temperature, 
-                # .yvar = value_norm_by_comp,
-                # filter_control_vars,
-                # .drop_control_cols
-                )
-
-ggsave("Exp0858--20200810_Nsp3_fragment_batch2_all_compounds_SYPRO_Cy55.pdf", p5, width = 15, height = 3 )
+                plot_title = "Exp0866--20200815_Nsp3_fragment_batch2_all_compounds_SYPRO", 
+                linetype_values = c("SP0150_Nsp3" = "solid", "Buffer" = "dashed"),
+                 .protein_name = "SP0150_Nsp3"
+                ) %>%
+      ggsave(paste0(SAVE_PATH, "Exp0866--20200815_Nsp3_fragment_batch1_all_compounds_SYPRO_TAMRA.pdf"), . , width = 25, height = 7 )
 ```
 
 
-
-Determine Tma using both dRFU and all four fitting models.
+Make Tma scatter plots
 ```{r}
-low_T <-  25
-high_T <- 94
-n_meas <- 69
-            
-n2r <- make_temp_n2r(range(low_T:high_T)) 
-win3d <- floor(3/((n2r(1) - n2r(0))/n_meas))
-if ( win3d < 5 ) { win3d <<- 5 }
-peak_finder_nest <- make_peak_finder_nest( win3d )
-sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width( win3d ))
+SYPRO_batch1_tms <- SYPRO_batch_1$fits$df_tms %>%
+    select(variable:channel_f,dRFU_tma) %>%
+  left_join(make_layout(LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"))) %>%
+  filter(channel_f == "TAMRA",
+         compound_group != "Empty") %>%
+  mutate_all(convert_numerics) 
 
-#sgfilt_nest <- sgfilt_set_n(n_ = find_sgolay_width(df)) # this will ultimately be set by the uploaded data
-sgfilt_nest <- sgfilt_set_n(n_ = 13)
+SYPRO_batch2_tms <- SYPRO_batch_2$fits$df_tms %>%
+    select(variable:channel_f,dRFU_tma) %>%
+  left_join(make_layout(LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"))) %>%
+  filter(channel_f == "TAMRA",
+         compound_group != "Empty") %>%
+  mutate_all(convert_numerics) 
 
-# fit only the channels which have signal
-by_variable <- by_variable %>%
-  filter(channel_f == "TAMRA")
-                #filter(channel_f %in% c("JOE", "TAMRA", "ROX"))
+SYPRO_all_hits <- bind_rows(SYPRO_batch1_tms, SYPRO_batch2_tms)
 
-df_tms <- by_variable %>% #df_int %>% # add the first derivative Tms
-    plyr::mutate(sgd1 = purrr::map(data, sgfilt_nest, m_ = 1)) %>% # add the first derivative data
-    plyr::mutate(dRFU_tma = as_vector(purrr::map2(data, sgd1, Tm_by_dRFU)))
+SYPRO_all_hits %>%
+  ggplot(aes(x = compound, y = dRFU_tma, color = compound_group, group = compound, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+  scale_shape_manual(values = c(16, 16, 16, 1, 16, 1)) +
+  scale_size_manual(values = c(3, 3, 3, 1.5, 3, 1.5)) +
+  geom_point( alpha = 0.5) +
+  geom_line(size=  0.5, alpha = 0.5) +
+    theme_bw() +
+  theme(axis.text.x = element_blank()) +
+  ylim(c(40, 55)) +
+  labs(title = "SYPRO dRFU Tmas") -> p_SYPRO
 
-df_tms 
-        
-start_pars <- get_start_pars(by_variable)
-s1_list <- model_all(s1_model, "s1_pred", start_pars, win3d) # requires "well" and "condition" columns
-s1_d_list <- model_all(s1_d_model, "s1_d_pred", start_pars, win3d)
-s2_list <- model_all(s2_model, "s2_pred", start_pars, win3d)
-s2_d_list <- model_all(s2_d_model, "s2_d_pred", start_pars, win3d)
+ggsave("Exp0866--20200815_SYPRO_dRFU_scatter_.pdf", p_SYPRO, width = 20, height = 4)
 
-save_list <- list(by_variable = by_variable,
-                  df_tms = df_tms,
-                  start_pars = start_pars,
-                  s1_list = s1_d_list,
-                  s1_d_list = s1_d_list,
-                  s2_list = s2_list,
-                  s2_d_list = s2_d_list)
+T004_batch1_tms <- T004_batch_1$fits$df_tms %>%
+    select(variable:channel_f,dRFU_tma) %>%
+  left_join(make_layout(LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"))) %>%
+  filter(channel_f == "FAM",
+         compound_group != "Empty") %>%
+  mutate_all(convert_numerics) 
 
-write_rds("Exp0858--20200810_Nsp3_dRFU_and_model_fit_TAMRA.rds", x = save_list)
+T004_batch2_tms <- T004_batch_2$fits$df_tms %>%
+    select(variable:channel_f,dRFU_tma) %>%
+  left_join(make_layout(LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"))) %>%
+  filter(channel_f == "FAM",
+         compound_group != "Empty") %>%
+  mutate_all(convert_numerics) 
+
+T004_all_hits <- bind_rows(T004_batch1_tms, T004_batch2_tms)
+
+T004_all_hits %>%
+  ggplot(aes(x = compound, y = dRFU_tma, color = compound_group, group = compound, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+  scale_shape_manual(values = c(16, 16, 16, 1, 16, 1)) +
+  scale_size_manual(values = c(3, 3, 3, 1.5, 3, 1.5)) +
+  geom_point( alpha = 0.5) +
+  geom_line(size=  0.5, alpha = 0.5) +
+    theme_bw() +
+  theme(axis.text.x = element_blank()) +
+  ylim(c(40, 55)) +
+  labs(title = "T004 dRFU Tmas") -> p_T4
+ggsave("Exp0866--20200815_T004_dRFU_scatter_.pdf", p_T4, width = 20, height = 4)
+
+
+all_hits <- bind_rows(T004_all_hits %>% mutate(dye = "T004") %>% filter(channel_f == "FAM"), 
+                      SYPRO_all_hits %>% mutate(dye = "SYPRO") %>% filter(channel_f == "TAMRA"))
+
+all_hits %>%
+  ggplot(aes(x = compound, y = dRFU_tma, color = dye, group = compound, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+  scale_shape_manual(values = c(16, 16, 16, 1, 16, 1)) +
+  scale_size_manual(values = c(3, 3, 3, 1.5, 3, 1.5)) +
+  geom_point( alpha = 0.5) +
+  geom_line(size=  0.5, alpha = 0.5) +
+    theme_bw() +
+  theme(axis.text.x = element_blank()) +
+  ylim(c(40, 55)) -> p_compare
+
+ggsave("Exp0866--20200815_SYPRO_T004_dRFU_scatter_compare.pdf", p_compare, width = 20, height = 4)
+
+all_hits %>%
+  filter(compound_group == "test") %>%
+  select(-c(condition, channel_f, variable)) %>%
+  pivot_wider(names_from = dye, values_from = dRFU_tma) %>%
+   bind_rows(all_controls) %>%
+   ggplot(aes(y = T004, x = SYPRO,  group = compound, color = compound_group, shape = concentration %>% as.character(), size = concentration %>% as.character())) +
+  scale_shape_manual(values = c(16, 16, 1, 1, 1, 1)) +
+  scale_size_manual(values = c(2, 2, 3, 1.5, 3, 1.5)) +
+  geom_line(size = 0.5, alpha = 0.7) +
+  #ggplot(aes(x = T004, y = SYPRO)) +
+  geom_point(alpha = 0.7) +
+  coord_fixed() +
+  ylim(c(47.5, 55)) +
+  xlim(c(47.5, 55)) +
+  geom_abline(slope = 1, intercept = 0, alpha = 0.5)
+
+
+T004_controls <- all_hits %>%
+filter(compound_group != "test",
+       dye == "T004") %>%
+  select(-c(condition, channel_f, variable))  %>%
+   rename(T004 = "dRFU_tma")
+
+SYPRO_controls <- all_hits %>%
+filter(compound_group != "test",
+       dye == "SYPRO") %>%
+  select(-c(condition, channel_f, variable)) %>%
+  rename(SYPRO = "dRFU_tma")
+
+all_controls <- left_join(T004_controls, SYPRO_controls %>% select(well, "SYPRO"), by = "well")
+all_controls
+
+
 ```
+
+
+
+
+
+
+
+
+
+
 
 Make the BIC plots for all of the fitted models
 ```{r}
@@ -630,10 +891,19 @@ df_models_p %>% head()
 
 ```
 
-Make a scatter plot of Tma versus compound (standard HTS plot)
+
+
+Make a more informed scatter plot incorporating parameters from the models (shape calling?)
 ```{r}
 
-df_raw %>%
+```
+
+
+```{r}
+
+
+
+SYPRO_batch_1$df_raw %>%
   filter(channel == 'TAMRA',
          dye == 'SYPRO',
          Temperature == 25) %>%
@@ -668,10 +938,7 @@ df_raw %>%
  
 ```
 
-Make a more informed scatter plot incorporating parameters from the models (shape calling?)
-```{r}
 
-```
 
 
 
