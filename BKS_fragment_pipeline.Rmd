@@ -218,27 +218,233 @@ T004_batch_2_fits <- merge_elements(T004_batch_2)
 SYPRO_batch_1_fits <- merge_elements(SYPRO_batch_1)
 SYPRO_batch_2_fits <- merge_elements(SYPRO_batch_2)
 
-T004_fits <- list("model_tmas" = bind_rows(T004_batch_1_fits$model_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
-                                           T004_batch_2_fits$model_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
-                  "dRFU_tmas" = bind_rows(T004_batch_1_fits$dRFU_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
-                                          T004_batch_2_fits$dRFU_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
-                  "df_BIC" = bind_rows(T004_batch_1_fits$df_BIC %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
-                                       T004_batch_2_fits$df_BIC %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))))
+T004_fits <- list("model_tmas" = bind_rows(T004_batch_1_fits$model_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")) %>% mutate(batch = "batch1"), 
+                                           T004_batch_2_fits$model_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition")) %>% mutate(batch = "batch2")%>%
+  mutate(batch = recode(batch, "Verdiperstat" = "pre_approved",	
+                                "kinetin" = "pre_approved", 
+                                "irsogladine" = "pre_approved",	
+                                "diaveridine" = "pre_approved",	
+                                "N6-Benzyladenine" = "pre_approved", 
+                                "ZINC1383151 / PP2" = "pre_approved",	
+                                "temodal" = "pre_approved",
+                        "DMSO" = "control",
+                        "ADP_ribose" = "control"))),
+                  "dRFU_tmas" = bind_rows(T004_batch_1_fits$dRFU_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")) %>% mutate(batch = "batch1"), 
+                                          T004_batch_2_fits$dRFU_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition")) %>% mutate(batch = "batch2")%>%
+  mutate(batch = recode(batch, "Verdiperstat" = "pre_approved",	
+                                "kinetin" = "pre_approved", 
+                                "irsogladine" = "pre_approved",	
+                                "diaveridine" = "pre_approved",	
+                                "N6-Benzyladenine" = "pre_approved", 
+                                "ZINC1383151 / PP2" = "pre_approved",	
+                                "temodal" = "pre_approved",
+                        "DMSO" = "control",
+                        "ADP_ribose" = "control"))),
+                  "df_BIC" = bind_rows(T004_batch_1_fits$df_BIC %>% left_join(make_layout(layout_path_1), by = c("well", "condition")) %>% mutate(batch = "batch1"), 
+                                       T004_batch_2_fits$df_BIC %>% left_join(make_layout(layout_path_2), by = c("well", "condition")) %>% mutate(batch = "batch2"))%>%
+  mutate(batch = recode(batch, "Verdiperstat" = "pre_approved",	
+                                "kinetin" = "pre_approved", 
+                                "irsogladine" = "pre_approved",	
+                                "diaveridine" = "pre_approved",	
+                                "N6-Benzyladenine" = "pre_approved", 
+                                "ZINC1383151 / PP2" = "pre_approved",	
+                                "temodal" = "pre_approved",
+                        "DMSO" = "control",
+                        "ADP_ribose" = "control")))
 
-SYPRO_fits <- list("model_tmas" = bind_rows(SYPRO_batch_1_fits$model_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
-                                            SYPRO_batch_2_fits$model_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
-                  "dRFU_tmas" = bind_rows(SYPRO_batch_1_fits$dRFU_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
-                                          SYPRO_batch_2_fits$dRFU_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
-                  "df_BIC" = bind_rows(SYPRO_batch_1_fits$df_BIC %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
-                                       SYPRO_batch_2_fits$df_BIC %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))))
+SYPRO_fits <- list("model_tmas" = bind_rows(SYPRO_batch_1_fits$model_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")) %>% mutate(batch = "batch1"), 
+                                            SYPRO_batch_2_fits$model_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition")) %>% mutate(batch = "batch2")%>%
+  mutate(batch = recode(batch, "Verdiperstat" = "pre_approved",	
+                                "kinetin" = "pre_approved", 
+                                "irsogladine" = "pre_approved",	
+                                "diaveridine" = "pre_approved",	
+                                "N6-Benzyladenine" = "pre_approved", 
+                                "ZINC1383151 / PP2" = "pre_approved",	
+                                "temodal" = "pre_approved",
+                        "DMSO" = "control",
+                        "ADP_ribose" = "control"))),
+                  "dRFU_tmas" = bind_rows(SYPRO_batch_1_fits$dRFU_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")) %>% mutate(batch = "batch1"), 
+                                          SYPRO_batch_2_fits$dRFU_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition")) %>% mutate(batch = "batch2")%>%
+  mutate(batch = recode(batch, "Verdiperstat" = "pre_approved",	
+                                "kinetin" = "pre_approved", 
+                                "irsogladine" = "pre_approved",	
+                                "diaveridine" = "pre_approved",	
+                                "N6-Benzyladenine" = "pre_approved", 
+                                "ZINC1383151 / PP2" = "pre_approved",	
+                                "temodal" = "pre_approved",
+                        "DMSO" = "control",
+                        "ADP_ribose" = "control"))),
+                  "df_BIC" = bind_rows(SYPRO_batch_1_fits$df_BIC %>% left_join(make_layout(layout_path_1), by = c("well", "condition")) %>% mutate(batch = "batch1"), 
+                                       SYPRO_batch_2_fits$df_BIC %>% left_join(make_layout(layout_path_2), by = c("well", "condition")) %>% mutate(batch = "batch2")%>%
+  mutate(batch = recode(batch, "Verdiperstat" = "pre_approved",	
+                                "kinetin" = "pre_approved", 
+                                "irsogladine" = "pre_approved",	
+                                "diaveridine" = "pre_approved",	
+                                "N6-Benzyladenine" = "pre_approved", 
+                                "ZINC1383151 / PP2" = "pre_approved",	
+                                "temodal" = "pre_approved",
+                        "DMSO" = "control",
+                        "ADP_ribose" = "control"))))
 
 all_fits <- list( "model_tmas" = bind_rows(SYPRO_fits$model_tmas %>% mutate(dye = "SYPRO"),
                                            T004_fits$model_tmas %>% mutate(dye = "T004")),
                   "dRFU_tmas" = bind_rows(SYPRO_fits$dRFU_tmas %>% mutate(dye = "SYPRO"),
                                            T004_fits$dRFU_tmas %>% mutate(dye = "T004")),
                   "df_BIC" = bind_rows(SYPRO_fits$df_BIC %>% mutate(dye = "SYPRO"),
-                                           T004_fits$df_BIC %>% mutate(dye = "T004")))
+                                           T004_fits$df_BIC %>% mutate(dye = "T004"))) 
 
+
+model_tmas <- all_fits$model_tmas %>% 
+  ungroup() %>%
+  mutate(batch = case_when( (compound %in% c("Verdiperstat",	"kinetin", "irsogladine",  "diaveridine" ,"N6-Benzyladenine", "ZINC1383151 / PP2" , "temodal")) ~ "pre_approved",
+                             (compound %in% c("ADP_ribose")) ~ "pos_control",
+                            (compound %in% c("DMSO")) ~ "neg_control",
+                              TRUE ~ batch)) %>%
+    mutate(batch = factor(batch, levels = c("pos_control", "neg_control", "pre_approved", "batch1", "batch2"))) %>%
+  arrange(batch) %>%
+     mutate(compound_f = factor(compound, levels = compound %>% unique()))
+
+additional_row <- model_tmas[1,] %>%
+                  mutate(condition = "one",
+                         mean_tma1 = NA,
+                         dye = "T004") 
+additional_row
+
+model_tmas %>%
+    filter(compound_group != "Empty",
+         which_model == "s1_d_pred",
+         dye == "T004") %>%
+  group_by(batch) %>%
+  tally()
+
+"DMSO_DMSO_0_SP0150_Nsp3_750"
+"temodal_test_50_SP0150_Nsp3_750"
+"ZINC000649348648_test_30_SP0150_Nsp3_750"
+```
+```{r}
+## define some of the means and SDs 
+all_fits$model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred",
+         dye == "T004",
+         between(mean_tma1, 40, 60)) %>%
+  group_by(compound_group) %>%
+  summarise(mean_tma = mean(mean_tma1),
+            sd_tma = sd(mean_tma1))
+
+all_fits$model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred",
+         dye == "SYPRO",
+         between(mean_tma1, 40, 60)) %>%
+  group_by(compound_group) %>%
+  summarise(mean_tma = mean(mean_tma1),
+            sd_tma = sd(mean_tma1))
+```
+
+
+```{r}
+model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred",
+         dye == "SYPRO") %>%
+  ggplot(aes(x = compound_f, y = mean_tma1, color = batch, shape = concentration %>% as.character(), size = concentration %>% as.character(), group = compound)) + # 
+  #scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+  scale_shape_manual(values = c(16,16,16,16,1,16,1)) +
+  scale_size_manual(values = c(1,3,3,3,1.5,3,1.5)) +  
+  scale_color_manual(values = c("black", "black","#7570b3", "#1b9e77", "#d95f02"))+
+  
+  geom_vline(xintercept = "DMSO", color = "grey", size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = "temodal", color = "grey", size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = "ZINC000649348648", color = "grey", size = 0.5, alpha = 0.5) + 
+  
+  
+  
+  geom_hline(yintercept = 50.36, color = "grey", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 53.94, color = "grey", size = 0.5, alpha = 0.5) +
+  
+  geom_hline(yintercept = 51.04535 + 3*0.1, color = "black", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 51.04535, color = "black", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 51.04535 - 3*0.1, color = "black", size = 0.5, alpha = 0.5) +
+  #geom_ribbon(aes(ymin = 50.09 - 3*0.2, ymax = 50.09 + 3*0.2), fill="blue", color = "blue",  alpha=0.5) +
+  
+  geom_line(size = 1, alpha = 0.7)+
+      geom_point(alpha = 0.7) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(47.5, 55)) +
+  theme(panel.grid = element_blank()) +
+ # facet_wrap(~control_or_test, ncol = 2, scales = "free_x") +
+  labs(title = "Exp0866--20200815_T004_s1d_tma_scatter", y = "Tma (ºC)", x = "Compound") -> p
+ggsave("Exp0866--20200815_SYPRO_s1d_tma_scatter_facet.pdf",  p, width = 12, height = 4)
+
+
+model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred",
+         dye == "T004") %>%
+  ggplot(aes(x = compound_f, y = mean_tma1, color = batch, shape = concentration %>% as.character(), size = concentration %>% as.character(), group = compound)) + # 
+  #scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+  scale_shape_manual(values = c(16,16,16,16,1,16,1)) +
+  scale_size_manual(values = c(1,3,3,3,1.5,3,1.5)) +  
+  scale_color_manual(values = c("black", "black","#7570b3", "#1b9e77", "#d95f02"))+
+  
+  geom_vline(xintercept = "DMSO", color = "grey", size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = "temodal", color = "grey", size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = "ZINC000649348648", color = "grey", size = 0.5, alpha = 0.5) + 
+  
+  
+  
+  geom_hline(yintercept = 52.00000, color = "grey", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 54.90000, color = "grey", size = 0.5, alpha = 0.5) +
+  
+  geom_hline(yintercept = 50.09 + 3*0.2, color = "black", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 50.09, color = "black", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 50.09 - 3*0.2, color = "black", size = 0.5, alpha = 0.5) +
+  #geom_ribbon(aes(ymin = 50.09 - 3*0.2, ymax = 50.09 + 3*0.2), fill="blue", color = "blue",  alpha=0.5) +
+  
+  geom_line(size = 1, alpha = 0.7)+
+      geom_point(alpha = 0.7) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(47.5, 55)) +
+  theme(panel.grid = element_blank()) +
+ # facet_wrap(~control_or_test, ncol = 2, scales = "free_x") +
+  labs(title = "Exp0866--20200815_T004_s1d_tma_scatter", y = "Tma (ºC)", x = "Compound") -> p2
+ggsave("Exp0866--20200815_T004_s1d_tma_scatter_facet.pdf",  p2, width = 12, height = 4)
+
+
+model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred") %>%
+  ggplot(aes(x = compound_f, y = mean_tma1, color = batch, shape = concentration %>% as.character(), size = concentration %>% as.character(), group = compound)) + # 
+  #scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+  scale_shape_manual(values = c(16,16,16,16,1,16,1)) +
+  scale_size_manual(values = c(1,3,3,3,1.5,3,1.5)) +  
+  scale_color_manual(values = c("black", "black","#7570b3", "#1b9e77", "#d95f02"))+
+  
+  geom_vline(xintercept = "DMSO", color = "grey", size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = "temodal", color = "grey", size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = "ZINC000649348648", color = "grey", size = 0.5, alpha = 0.5) + 
+  
+  
+  
+  geom_hline(yintercept = 50.36, color = "grey", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 53.94, color = "grey", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 50.09 + 3*0.2, color = "black", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 50.09, color = "black", size = 0.5, alpha = 0.5) +
+  geom_hline(yintercept = 50.09 - 3*0.2, color = "black", size = 0.5, alpha = 0.5) +
+  #geom_ribbon(aes(ymin = 50.09 - 3*0.2, ymax = 50.09 + 3*0.2), fill="blue", color = "blue",  alpha=0.5) +
+  
+  geom_line(size = 1, alpha = 0.7)+
+      geom_point(alpha = 0.7) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(47.5, 55)) +
+  theme(panel.grid = element_blank()) +
+ facet_wrap(~dye, ncol = 1) +
+  labs(title = "Exp0866--20200815_SYPRO_T004_s1d_tma_scatter", y = "Tma (ºC)", x = "Compound") -> p3
+ggsave("Exp0866--20200815_SYPRO_s1d_tma_scatter_facet.pdf",  p3, width = 12, height = 6)
 ```
 
 ```{r}
@@ -274,28 +480,6 @@ all_fits$model_tmas %>%
   summarise(mean_tma = mean(mean_tma1),
             sd_tma = sd(mean_tma1))
   
-  
-all_fits$model_tmas %>%
-  filter(compound_group != "Empty",
-         which_model == "s1_d_pred",
-         dye == "T004") %>%
-  ggplot(aes(x = condition, y = mean_tma1, color = compound_group, shape = concentration %>% as.character(), size = concentration %>% as.character(), group = compound)) + # 
-  #scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
-  scale_shape_manual(values = c(16,16,16,16,1,16,1)) +
-  scale_size_manual(values = c(1,3,3,3,1.5,3,1.5)) +  
-  geom_hline(yintercept = 50.36, color = "grey", size = 0.5) +
-  geom_hline(yintercept = 53.94, color = "grey", size = 0.5) +
-  
-  geom_hline(yintercept = 50.09 + 3*0.2, color = "red", size = 0.5) +
-  geom_hline(yintercept = 50.09, color = "red", size = 0.5) +
-  geom_hline(yintercept = 50.09 - 3*0.2, color = "red", size = 0.5) +
-  
-  geom_line(size = 0.5, alpha = 0.5)+
-      geom_point(alpha = 0.5) +
-      theme_bw() +
-      theme(axis.text.x = element_blank()) +
-  ylim(c(47.5, 55)) +
-  labs(title = "Exp0866--20200815_T004_s1d_tma_scatter", y = "Tma (ºC)", x = "Compound") -> p
 
 all_fits$model_tmas %>%
   filter(compound_group != "Empty",
@@ -323,6 +507,24 @@ all_fits$model_tmas %>%
 
 ggsave("Exp0866--20200815_SYPRO_T004_s1d_tma_scatter.pdf", p_facet, width = 12, height = 4)
 ```
+
+
+
+```{r}
+install.packages("ggpubr")
+library(ggpubr)
+
+ggscatterhist(
+  all_fits$model_tmas %>% filter(compound_group != "Empty",
+                                 which_model == "s1_d_pred",
+                                 dye == "T004"), 
+  x = "condition", y = "mean_tma1",
+  color = "compound_group", size = 3, alpha = 0.6,
+  palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+  margin.params = list(fill = "compound_group", color = "black", size = 0.2)
+  )
+```
+
 
 ```{r}
 all_fits_wide <- all_fits$model_tmas %>%
