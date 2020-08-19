@@ -25,6 +25,14 @@ as_vector <- purrr::as_vector
 
 
 ```{r}
+# when you've messed up and need to swap out your layout. Ultimately, this really should not be used, as layout shouldn't be added during fitting (fitting results need not update when the layout does)
+swap_layout <- function(df_raw, new_layout_file) {
+  df_raw %>%
+    select(variable:channel_f,Temperature_norm:value_norm_by_comp ) %>%
+    left_join(make_layout(new_layout_file), by = "well")
+  
+}
+
 process_screen <- function(DATA_PATH, 
                            LAYOUT_PATH, 
                            screen_name,
@@ -112,6 +120,8 @@ make_screen_process <- function(low_T = 25,
 MAIN_PATH <- "data/Exp0866--20200811_Nsp3_T004_SYPRO_fragment_all_batch_retest/"
 LAYOUT_PATH <- MAIN_PATH %>% paste0("layouts/")
 SAVE_PATH <- MAIN_PATH %>% paste0("out/")
+layout_path_1 <- LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv")
+layout_path_2 <- LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv")
 
 process_FAM_screen <- make_screen_process(low_T = 25,
                                                 high_T = 94,
@@ -130,52 +140,7 @@ process_TAMRA_screen <- make_screen_process(low_T = 25,
                                                 temp_range = c(25, 84)) 
 ```
 
-```{r}
-# when you've messed up and need to swap out your layout. Ultimately, this really should not be used, as layout shouldn't be added during fitting (fitting results need not update when the layout does)
-swap_layout <- function(df_raw, new_layout_file) {
-  df_raw %>%
-    select(variable:channel_f,Temperature_norm:value_norm_by_comp ) %>%
-    left_join(make_layout(new_layout_file), by = "well")
-  
-}
 
-T004_batch_1$df_raw <- swap_layout(T004_batch_1$df_raw, LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"))
-SYPRO_batch_1$df_raw <- swap_layout(SYPRO_batch_1$df_raw, LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv"))
-
-T004_batch_2$df_raw <- swap_layout(T004_batch_2$df_raw, LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"))
-SYPRO_batch_2$df_raw <- swap_layout(SYPRO_batch_2$df_raw, LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv"))
-```
-
-Quick data exploration
-```{r}
-##### work this into the processing script!!!! you should be able to checkpoint during processing to pass a temperature filter if necessary prior to fitting 
-quick_look <- function(df, 
-                       filter_vars, 
-                       color_var, 
-                       plot_title = "", 
-                       linetype_values,
-                       xvar = Temperature, 
-                       yvar = value
-                       ) {
-  ### from advanced R, and probably a reason to think about the way we do flexible filtering right now
-  # If you find yourself working with strings containing code very frequently, you should reconsider your process. Read Chapter 19 and consider whether you can generate expressions using quasiquotation more safely.
-  
-  df %>%
-    filter( !!rlang::parse_expr(.filter_vars) ) %>%
-    
-    ggplot(aes(x = {{xvar}}, y = {{yvar}}, group = variable, color = {{color_var}}, linetype = protein)) +
-        scale_linetype_manual(values = linetype_values) +
-        geom_line(alpha = 0.5) +
-        labs(x = "Temperature", y = "RFU", title = plot_title)
-  
-}
-
-quick_look(T004_batch_1$df_raw %>% filter( between(Temperature, 30, 86), protein != "Empty") , 
-           .filter_vars = "channel == 'FAM'", # & dye == 'T004' & compound_group != 'test'", 
-           color_var = compound_group, 
-           plot_title = "Exp0866 T004 with Batch 2 compounds  \ndye = T004, channel =  FAM",
-           linetype_values  = c( "SP0150_Nsp3" = "solid", "Buffer" = "dotted"))
-```
 
 
 ```{r}
@@ -215,81 +180,6 @@ T004_batch_2 <- process_FAM_screen (DATA_PATH = MAIN_PATH %>% paste0("Exp0866_20
 # ℹ See <https://tidyselect.r-lib.org/reference/faq-external-vector.html>.
 ```
 
-Checking up on each of the datasets
-```{r}
-layout_path_1 <- LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv")
-layout_path_2 <- LAYOUT_PATH %>% paste0("Exp0865.2--20200811_Nsp3_mac1_fragments_batch2_layout.csv")
-
-T004_batch_1$df_raw %>% head()
-
-T004_batch_1$by_variable %>% 
-  group_by(well) %>%
-  select(well, channel_f) %>%
-  tally() # 5 channels for everything
-
-
-T004_batch_1$by_variable %>%
-  group_by(compound_group) %>%
-  tally() %>%
-  mutate(per_channel = n/5) %>%
-  mutate(with_protein = per_channel/2) # # looks right: 4 of each control + 120 test compounds
-
-T004_batch_2$by_variable %>%
-  group_by(compound_group) %>%
-  tally() %>%
-  mutate(per_channel = n/5) %>%
-  mutate(with_protein = per_channel/2) # looks right: 6 of ecah control + 150 test compounds 
-
-SYPRO_batch_1$by_variable %>%
-  group_by(compound_group) %>%
-  tally() %>%
-  mutate(per_channel = n/5) %>%
-  mutate(with_protein = per_channel/2) # looks right: 4 of each control + 120 test compounds 
-
-SYPRO_batch_2$by_variable %>%
-  group_by(compound_group) %>%
-  tally() %>%
-  mutate(per_channel = n/5) %>%
-  mutate(with_protein = per_channel/2) # looks right: 6 of ecah control + 150 test compounds 
-
-
-T004_batch_1$fits$s1_list$tm_models_all %>%
-  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
-  group_by(compound_group) %>%
-  tally() # 4, 4, 120
-
-T004_batch_1$fits$s1_list$tm_models_all %>%
-  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
-  distinct() %>%
-  nrow() # 136: with 8 empties, this checks out
-
-T004_batch_1$fits$s1_list$tm_models_all %>%
-  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
-  group_by(compound_group) %>%
-  tally() # 4, 4, 120, 8 empties
-
-
-T004_batch_1$fits$s1_d_list$tm_models_all %>%
-  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
-  distinct() %>%
-  nrow() # 136: with 8 empties, this checks out
-
-T004_batch_1$fits$s1_d_list$tm_models_all %>%
-  left_join(make_layout(layout_path_1), by = c("well", "condition")) %>%
-  group_by(compound_group) %>%
-  tally() # 4, 4, 120, 8 empties
-
-T004_batch_2$fits$s1_d_list$tm_models_all %>%
-  left_join(make_layout(layout_path_2), by = c("well", "condition")) %>%
-  distinct() %>%
-  nrow() # 162: with 8 empties, this checks out
-
-T004_batch_2$fits$s1_d_list$tm_models_all %>%
-  left_join(make_layout(layout_path_2), by = c("well", "condition")) %>%
-  group_by(compound_group) %>%
-  tally() # 6, 6, 150, 0 empties
-```
-
 ```{r}
 T004_batch_2$fits$s1_d_list$tm_models_all # has well and condition
 T004_batch_2$fits$s1_d_list$tm_table_models # is averaged, and not what you want here!!
@@ -323,15 +213,186 @@ out_list <- list("model_tmas" = out[[1]][[2]],
 
 }
 
+T004_batch_1_fits <- merge_elements(T004_batch_1)
 T004_batch_2_fits <- merge_elements(T004_batch_2)
-T004_batch_2_fits$dRFU_tmas
-T004_batch_2_fits$model_tmas
+SYPRO_batch_1_fits <- merge_elements(SYPRO_batch_1)
+SYPRO_batch_2_fits <- merge_elements(SYPRO_batch_2)
 
+T004_fits <- list("model_tmas" = bind_rows(T004_batch_1_fits$model_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
+                                           T004_batch_2_fits$model_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
+                  "dRFU_tmas" = bind_rows(T004_batch_1_fits$dRFU_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
+                                          T004_batch_2_fits$dRFU_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
+                  "df_BIC" = bind_rows(T004_batch_1_fits$df_BIC %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
+                                       T004_batch_2_fits$df_BIC %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))))
+
+SYPRO_fits <- list("model_tmas" = bind_rows(SYPRO_batch_1_fits$model_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
+                                            SYPRO_batch_2_fits$model_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
+                  "dRFU_tmas" = bind_rows(SYPRO_batch_1_fits$dRFU_tmas %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
+                                          SYPRO_batch_2_fits$dRFU_tmas %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))),
+                  "df_BIC" = bind_rows(SYPRO_batch_1_fits$df_BIC %>% left_join(make_layout(layout_path_1), by = c("well", "condition")), 
+                                       SYPRO_batch_2_fits$df_BIC %>% left_join(make_layout(layout_path_2), by = c("well", "condition"))))
+
+all_fits <- list( "model_tmas" = bind_rows(SYPRO_fits$model_tmas %>% mutate(dye = "SYPRO"),
+                                           T004_fits$model_tmas %>% mutate(dye = "T004")),
+                  "dRFU_tmas" = bind_rows(SYPRO_fits$dRFU_tmas %>% mutate(dye = "SYPRO"),
+                                           T004_fits$dRFU_tmas %>% mutate(dye = "T004")),
+                  "df_BIC" = bind_rows(SYPRO_fits$df_BIC %>% mutate(dye = "SYPRO"),
+                                           T004_fits$df_BIC %>% mutate(dye = "T004")))
 
 ```
 
+```{r}
+all_fits$dRFU_tmas %>%
+  filter(compound_group != "Empty") %>%
+  ggplot(aes(x = condition, y = mean_tma1, color = dye, shape = compound_group)) +
+  scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+      geom_point(alpha = 0.5) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(40,60))
 
 
+all_fits$model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred") %>%
+  ggplot(aes(x = condition, y = mean_tma1, color = dye, shape = compound_group)) +
+  scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+      geom_point(alpha = 0.5) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(40,60))
+
+```
+
+```{r}
+all_fits$model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred",
+         dye == "T004",
+         between(mean_tma1, 40, 60)) %>%
+  group_by(compound_group) %>%
+  summarise(mean_tma = mean(mean_tma1),
+            sd_tma = sd(mean_tma1))
+  
+  
+all_fits$model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred",
+         dye == "T004") %>%
+  ggplot(aes(x = condition, y = mean_tma1, color = compound_group, shape = concentration %>% as.character(), size = concentration %>% as.character(), group = compound)) + # 
+  #scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+  scale_shape_manual(values = c(16,16,16,16,1,16,1)) +
+  scale_size_manual(values = c(1,3,3,3,1.5,3,1.5)) +  
+  geom_hline(yintercept = 50.36, color = "grey", size = 0.5) +
+  geom_hline(yintercept = 53.94, color = "grey", size = 0.5) +
+  
+  geom_hline(yintercept = 50.09 + 3*0.2, color = "red", size = 0.5) +
+  geom_hline(yintercept = 50.09, color = "red", size = 0.5) +
+  geom_hline(yintercept = 50.09 - 3*0.2, color = "red", size = 0.5) +
+  
+  geom_line(size = 0.5, alpha = 0.5)+
+      geom_point(alpha = 0.5) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(47.5, 55)) +
+  labs(title = "Exp0866--20200815_T004_s1d_tma_scatter", y = "Tma (ºC)", x = "Compound") -> p
+
+all_fits$model_tmas %>%
+  filter(compound_group != "Empty",
+         which_model == "s1_d_pred") %>%
+  mutate(dye_compound = paste0(dye, compound, sep = "_")) %>%
+  ggplot(aes(x = condition, y = mean_tma1, color = dye, shape = concentration %>% as.character(), size = concentration %>% as.character(), group = dye_compound)) + # 
+  #scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+  scale_shape_manual(values = c(16,16,16,16,1,16,1)) +
+  scale_size_manual(values = c(1,3,3,3,1.5,3,1.5)) +  
+  geom_hline(yintercept = 50.36, color = "grey", size = 0.5) +
+  geom_hline(yintercept = 53.94, color = "grey", size = 0.5) +
+  
+  geom_hline(yintercept = 50.09 + 3*0.2, color = "red", size = 0.5) +
+  geom_hline(yintercept = 50.09, color = "red", size = 0.5) +
+  geom_hline(yintercept = 50.09 - 3*0.2, color = "red", size = 0.5) +
+  
+  geom_line(size = 0.5, alpha = 0.5)+
+      geom_point(alpha = 0.5) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(47.5, 55)) +
+ # facet_wrap(~dye, ncol = 1) +
+  labs(title = "Exp0866--20200815_SYPRO_T004_s1d_tma_scatter", y = "Tma (ºC)", x = "Compound") -> p_facet
+
+
+ggsave("Exp0866--20200815_SYPRO_T004_s1d_tma_scatter.pdf", p_facet, width = 12, height = 4)
+```
+
+```{r}
+all_fits_wide <- all_fits$model_tmas %>%
+  filter(which_model == "s1_d_pred",
+         compound_group != "Empty") %>% ##compound_group == "test",
+         
+  select(-sigmoid_1) %>% 
+  mutate(well_condition = paste0(well, condition, sep = "_")) %>%
+  pivot_wider(names_from = dye, values_from = mean_tma1, values_fn = mean )
+all_fits_wide 
+
+all_fits_wide %>%
+ ggplot(aes(x = T004, y = SYPRO, color = compound_group, shape = concentration %>% as.character(), size = concentration %>% as.character(), group = compound)) + # 
+  #scale_shape_manual(values = c("DMSO" = 1, "ADP_ribose" = 1, "test" = 16)) +
+  scale_shape_manual(values = c(16,16,16,16,1,16,1)) +
+  scale_size_manual(values = c(1,3,3,3,1.5,3,1.5)) +  
+
+  
+  geom_line(size = 0.5, alpha = 0.5)+
+      geom_point(alpha = 0.5) +
+      theme_bw() +
+      theme(axis.text.x = element_blank()) +
+  ylim(c(47.5, 55)) +
+   xlim(c(47.5, 55)) +
+  coord_fixed() +
+  geom_abline(slope = 1, intercept = 0) +
+ # facet_wrap(~dye, ncol = 1) +
+  labs(title = "Exp0866--20200815_SYPRO_T004_tma_comparision_s1d", y = "SYPRO", x = "T004") -> p_compare
+
+p_compare
+
+
+all_fits_wide <- all_fits$model_tmas %>%
+  filter(compound_group != "test",
+         which_model == "s1_d_pred") %>%
+  select(-sigmoid_1) %>% 
+  pivot_wider(names_from = dye, values_from = mean_tma1)
+
+```
+
+Quick data exploration
+```{r}
+##### work this into the processing script!!!! you should be able to checkpoint during processing to pass a temperature filter if necessary prior to fitting 
+quick_look <- function(df, 
+                       filter_vars, 
+                       color_var, 
+                       plot_title = "", 
+                       linetype_values,
+                       xvar = Temperature, 
+                       yvar = value
+                       ) {
+  ### from advanced R, and probably a reason to think about the way we do flexible filtering right now
+  # If you find yourself working with strings containing code very frequently, you should reconsider your process. Read Chapter 19 and consider whether you can generate expressions using quasiquotation more safely.
+  
+  df %>%
+    filter( !!rlang::parse_expr(.filter_vars) ) %>%
+    
+    ggplot(aes(x = {{xvar}}, y = {{yvar}}, group = variable, color = {{color_var}}, linetype = protein)) +
+        scale_linetype_manual(values = linetype_values) +
+        geom_line(alpha = 0.5) +
+        labs(x = "Temperature", y = "RFU", title = plot_title)
+  
+}
+
+quick_look(T004_batch_1$df_raw %>% filter( between(Temperature, 30, 86), protein != "Empty") , 
+           .filter_vars = "channel == 'FAM'", # & dye == 'T004' & compound_group != 'test'", 
+           color_var = compound_group, 
+           plot_title = "Exp0866 T004 with Batch 2 compounds  \ndye = T004, channel =  FAM",
+           linetype_values  = c( "SP0150_Nsp3" = "solid", "Buffer" = "dotted"))
+```
 
 Re-entry: read in the processe screens
 ```{r}
@@ -339,85 +400,6 @@ Re-entry: read in the processe screens
 # T004_batch_2 = readRDS(MAIN_PATH %>% paste0("out/Exp866_batch2_T004_fits.rds"))
 # SYPRO_batch_1 = readRDS(MAIN_PATH %>% paste0("out/Exp866_batch1_SYPRO_fits.rds"))
 # SYPRO_batch_2 = readRDS(MAIN_PATH %>% paste0("out/Exp866_batch2_SYPRO_fits.rds"))
-```
-
-
-This should be better functionalized, but is code worth continuing to work on!! don't just rewrite this bit!
-```{r}
-#### add this to the final processing script, ultimately! This step should not be generated---it is clearning up a data org. mess made by poor planning in an earlier function
-merge_elements <- function(in_list, element) {
-  
-   lapply(c(4:7), function(x) in_list$fits[[x]][[element]])    %>%
-     bind_rows()
- 
-}
-
-merge_and_add_layout <- function(batch_list, element_number, layout_file, join_layout_by) {
-  out_df <- merge_elements(batch_list, element_number) %>%
-              left_join(make_layout(layout_file), by = join_layout_by) #make_layout(LAYOUT_PATH %>% paste0("Exp0865.1--20200811_Nsp3_mac1_fragments_batch1_layout.csv")), by = "condition")
-}
-
-
-
-t4_tms <- bind_rows( merge_and_add_layout(batch_list = T004_batch_1, 
-                                 element_number = 4, 
-                                 layout_file = layout_path_1, 
-                                 join_layout_by = "condition"),
-                     
-                     merge_and_add_layout(batch_list = T004_batch_2, 
-                                 element_number = 4, 
-                                 layout_file = layout_path_2, 
-                                 join_layout_by = "condition")) %>%
-                      filter(compound_group != "Empty")%>%
-  distinct(condition, well, which_model, .keep_all = TRUE) 
-
-t4_BICs <- bind_rows( merge_and_add_layout(batch_list = T004_batch_1, 
-                                 element_number = 2, 
-                                 layout_file = layout_path_1, 
-                                 join_layout_by = c("well","condition")),
-                     
-                     merge_and_add_layout(batch_list = T004_batch_2, 
-                                 element_number = 2, 
-                                 layout_file = layout_path_2, 
-                                 join_layout_by = c("well","condition")))%>%
-                      filter(compound_group != "Empty")%>%
-  distinct(condition, well, which_model, .keep_all = TRUE) 
-
-
-SYPRO_tms <- bind_rows( merge_and_add_layout(batch_list = SYPRO_batch_1, 
-                                 element_number = 4, 
-                                 layout_file = layout_path_1, 
-                                 join_layout_by = "condition"),
-                     
-                     merge_and_add_layout(batch_list = SYPRO_batch_2, 
-                                 element_number = 4, 
-                                 layout_file = layout_path_2, 
-                                 join_layout_by = "condition"))%>%
-                      filter(compound_group != "Empty")%>%
-  distinct(condition, well, which_model, .keep_all = TRUE) 
-
-
-SYPRO_BICs <- bind_rows( merge_and_add_layout(batch_list = SYPRO_batch_1, 
-                                 element_number = 2, 
-                                 layout_file = layout_path_1, 
-                                 join_layout_by = c("well","condition")),
-                     
-                     merge_and_add_layout(batch_list = SYPRO_batch_2, 
-                                 element_number = 2, 
-                                 layout_file = layout_path_2, 
-                                 join_layout_by = c("well","condition")))%>%
-                      filter(compound_group != "Empty") %>%
-  distinct(condition, well, which_model, .keep_all = TRUE) 
-
-
-SYPRO_fits <- left_join(SYPRO_tms, SYPRO_BICs %>% select(condition, which_model, BIC, well), by = c("well","condition", "which_model")) %>% ungroup()
-T004_fits <- left_join(t4_tms, t4_BICs %>% select(condition, which_model, BIC, well), by = c("well","condition", "which_model")) %>% ungroup()
-
-# make sure everything has the same number of rows
-t4_BICs %>% nrow() == t4_tms %>% nrow() 
-t4_tms %>% nrow() == T004_fits %>% nrow() 
-SYPRO_tms %>% nrow() == SYPRO_BICs %>% nrow() 
-SYPRO_BICs %>% nrow() == SYPRO_fits %>% nrow()
 ```
 
 Make some plots using model tmas
